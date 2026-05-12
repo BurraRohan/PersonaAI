@@ -75,7 +75,7 @@ PersonaAI/
 ### Setup
 
 ```bash
-cd PersonaAI-v2
+cd PersonaAI
 
 python -m venv venv
 venv\Scripts\activate        # Windows
