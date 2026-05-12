@@ -1,0 +1,35 @@
+version: "3.8"
+
+services:
+  # ── PersonaAI API ───────────────────────────────────────────
+  personaai:
+    build: .
+    container_name: personaai-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./personaai.db:/app/personaai.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Streamlit Dashboard ─────────────────────────────────────
+  dashboard:
+    build: .
+    container_name: personaai-dashboard
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      - ./personaai.db:/app/personaai.db
+    command: ["streamlit", "run", "streamlit_dashboard.py", "--server.port=8501", "--server.address=0.0.0.0"]
+    depends_on:
+      personaai:
+        condition: service_healthy
+    restart: unless-stopped

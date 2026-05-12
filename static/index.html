@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PersonaAI – LinkedIn Branding Intelligence</title>
+    <meta name="description" content="AI-powered LinkedIn personal branding assistant" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="icon" href="/static/favicon.ico" type="image/x-icon" />
+  </head>
+  <body>
+    <!-- ─── Header ──────────────────────────────────── -->
+    <header>
+      <div class="logo"><span class="logo-icon">◆</span> PersonaAI</div>
+      <p class="tagline">LinkedIn Branding Intelligence Agent</p>
+    </header>
+
+    <!-- ─── Tabs ────────────────────────────────────── -->
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="dashboard" role="tab" aria-selected="true">Dashboard</button>
+      <button class="tab" data-tab="brand" role="tab">Brand Profile</button>
+      <button class="tab" data-tab="generate" role="tab">Generate Post</button>
+      <button class="tab" data-tab="predictor" role="tab">Predictor</button>
+      <button class="tab" data-tab="engagement" role="tab">Engagement</button>
+      <button class="tab" data-tab="feedback" role="tab">Feedback</button>
+    </nav>
+
+    <main>
+      <!-- ─── Dashboard (NEW) ───────────────────────── -->
+      <section id="dashboard" class="panel active">
+        <h1>Dashboard</h1>
+        <p class="hint">Enter your Brand Profile ID to load your dashboard, or create a new profile in the Brand Profile tab.</p>
+        <form id="dashboard-form">
+          <div class="form-grid">
+            <div class="field">
+              <label for="dash-user-id">Brand Profile ID</label>
+              <input type="number" id="dash-user-id" placeholder="1" min="1" required />
+            </div>
+          </div>
+          <button type="submit" class="btn">Load Dashboard</button>
+        </form>
+        <div id="dashboard-result" class="result hidden"></div>
+      </section>
+
+      <!-- ─── Brand Profile ─────────────────────────── -->
+      <section id="brand" class="panel">
+        <h1>Create Brand Profile</h1>
+        <p class="hint">Fill in your professional details to generate a structured brand strategy.</p>
+        <form id="brand-form">
+          <div class="form-grid">
+            <div class="field">
+              <label for="brand-name">Full Name</label>
+              <input type="text" id="brand-name" placeholder="Alice Johnson" required />
+            </div>
+            <div class="field">
+              <label for="brand-role">Role</label>
+              <input type="text" id="brand-role" placeholder="ML Engineer" required />
+            </div>
+            <div class="field">
+              <label for="brand-industry">Industry</label>
+              <input type="text" id="brand-industry" placeholder="AI/ML" required />
+            </div>
+            <div class="field">
+              <label for="brand-tone">Preferred Tone</label>
+              <input type="text" id="brand-tone" placeholder="Professional yet approachable" required />
+            </div>
+            <div class="field full-width">
+              <label for="brand-goals">Goals</label>
+              <textarea id="brand-goals" rows="2" placeholder="Thought leadership and community building" required></textarea>
+            </div>
+          </div>
+          <button type="submit" class="btn">Generate Brand Profile</button>
+        </form>
+        <div id="brand-result" class="result hidden"></div>
+      </section>
+
+      <!-- ─── Generate Post ─────────────────────────── -->
+      <section id="generate" class="panel">
+        <h1>Generate LinkedIn Post</h1>
+        <p class="hint">Enter a topic and we'll create a post aligned with your brand.</p>
+        <form id="generate-form">
+          <div class="form-grid">
+            <div class="field">
+              <label for="gen-user-id">Brand Profile ID</label>
+              <input type="number" id="gen-user-id" placeholder="1" min="1" required />
+            </div>
+            <div class="field full-width">
+              <label for="gen-topic">Topic</label>
+              <textarea id="gen-topic" rows="2" placeholder="Why fine-tuning matters more than prompt engineering" required></textarea>
+            </div>
+          </div>
+          <button type="submit" class="btn">Generate Post</button>
+        </form>
+        <div id="generate-result" class="result hidden"></div>
+      </section>
+
+      <!-- ─── Predictor ─────────────────────────────── -->
+      <section id="predictor" class="panel">
+        <h1>Engagement Predictor</h1>
+        <p class="hint">Paste your draft post to predict how it will perform before publishing.</p>
+        <form id="predictor-form">
+          <div class="form-grid">
+            <div class="field">
+              <label for="pred-user-id">Brand Profile ID</label>
+              <input type="number" id="pred-user-id" placeholder="1" min="1" required />
+            </div>
+            <div class="field full-width">
+              <label for="pred-draft">Draft Post</label>
+              <textarea id="pred-draft" rows="6" placeholder="Paste your LinkedIn draft here…" required></textarea>
+            </div>
+          </div>
+          <button type="submit" class="btn">Predict Engagement</button>
+        </form>
+        <div id="predictor-result" class="result hidden"></div>
+      </section>
+
+      <!-- ─── Engagement ────────────────────────────── -->
+      <section id="engagement" class="panel">
+        <h1>Log Engagement</h1>
+        <p class="hint">Record engagement metrics for a generated post.</p>
+        <form id="engagement-form">
+          <div class="form-grid">
+            <div class="field">
+              <label for="eng-post-id">Post ID</label>
+              <input type="number" id="eng-post-id" placeholder="1" min="1" required />
+            </div>
+            <div class="field">
+              <label for="eng-likes">Likes</label>
+              <input type="number" id="eng-likes" placeholder="42" min="0" required />
+            </div>
+            <div class="field">
+              <label for="eng-comments">Comments</label>
+              <input type="number" id="eng-comments" placeholder="7" min="0" required />
+            </div>
+            <div class="field">
+              <label for="eng-shares">Shares</label>
+              <input type="number" id="eng-shares" placeholder="3" min="0" required />
+            </div>
+          </div>
+          <button type="submit" class="btn">Log Engagement</button>
+        </form>
+        <div id="engagement-result" class="result hidden"></div>
+      </section>
+
+      <!-- ─── Feedback ──────────────────────────────── -->
+      <section id="feedback" class="panel">
+        <h1>Get Strategy Feedback</h1>
+        <p class="hint">Analyse your engagement history and get AI-powered recommendations.</p>
+        <form id="feedback-form">
+          <div class="form-grid">
+            <div class="field">
+              <label for="fb-user-id">Brand Profile ID</label>
+              <input type="number" id="fb-user-id" placeholder="1" min="1" required />
+            </div>
+          </div>
+          <button type="submit" class="btn">Get Feedback</button>
+        </form>
+        <div id="feedback-result" class="result hidden"></div>
+      </section>
+    </main>
+
+    <!-- ─── Toast ───────────────────────────────────── -->
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
