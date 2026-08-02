@@ -29,18 +29,63 @@ Every response carries two fields that make this inspectable:
 | `execution_mode` | `agent` when the agent ran and persisted its work; `direct` when `AGENT_MODE=0` was set deliberately; `fallback_direct` when the agent failed and the single-call path rescued the request |
 | `agent_trace`    | Ordered list of the tool calls the model chose, and what each returned                                                                                                                     |
 
-A real trace from `POST /brand`:
+A real trace from `POST /brand`, captured from a live run against Groq:
 
 ```json
+"execution_mode": "agent",
 "agent_trace": [
-  {"step": 1, "action": "tool_call",   "tool": "check_existing_profile",  "args": {"name": "Ada Lovelace"}},
-  {"step": 2, "action": "tool_result", "tool": "check_existing_profile",  "result": "{\"exists\": false}"},
-  {"step": 3, "action": "tool_call",   "tool": "generate_brand_strategy", "args": {"name": "Ada Lovelace", "role": "ML Engineer", "...": "..."}},
-  {"step": 4, "action": "tool_result", "tool": "generate_brand_strategy", "result": "{\"tone\": \"Direct and practical\", \"...\": \"...\"}"},
-  {"step": 5, "action": "tool_call",   "tool": "save_brand_profile",      "args": {"strategy_json": "...", "...": "..."}},
-  {"step": 6, "action": "tool_result", "tool": "save_brand_profile",      "result": "{\"id\": 4, \"status\": \"saved\"}"}
+  {
+    "step": 1,
+    "action": "tool_call",
+    "tool": "check_existing_profile",
+    "args": { "name": "Demo User" }
+  },
+  {
+    "step": 2,
+    "action": "tool_result",
+    "tool": "check_existing_profile",
+    "result": "{\"exists\": false}"
+  },
+  {
+    "step": 3,
+    "action": "tool_call",
+    "tool": "generate_brand_strategy",
+    "args": {
+      "name": "Demo User",
+      "role": "SDE-II",
+      "industry": "Automobile",
+      "goals": "Build authority in automotive AI",
+      "preferred_tone": "Professional and approachable"
+    }
+  },
+  {
+    "step": 4,
+    "action": "tool_result",
+    "tool": "generate_brand_strategy",
+    "result": "{\"tone\": \"The ideal tone is professional and approachable...\", \"content_themes\": [\"Automotive AI Trends\", \"Innovation in Autonomous Vehicles\", ...]}"
+  },
+  {
+    "step": 5,
+    "action": "tool_call",
+    "tool": "save_brand_profile",
+    "args": {
+      "name": "Demo User",
+      "strategy_json": "{ ...the JSON returned by step 4... }"
+    }
+  },
+  {
+    "step": 6,
+    "action": "tool_result",
+    "tool": "save_brand_profile",
+    "result": "{\"id\": 5, \"status\": \"saved\"}"
+  }
 ]
 ```
+
+The model was not told to call those tools in that order. It checked for an
+existing profile first, saw none, generated a strategy, then persisted it —
+choosing each step from the tool descriptions alone. Tool results longer than
+400 characters are truncated in the trace to keep responses readable.
 
 ### Tools available to each agent
 
@@ -78,32 +123,7 @@ A rate limit or a malformed tool call would otherwise surface as a 500. When the
 
 `POST /orchestrate` runs the whole pipeline through a LangGraph `StateGraph` with conditional edges. Routing is decided at runtime, not hardcoded.
 
-```
-        ┌─────────┐
-        │  brand  │
-        └────┬────┘
-     error   │   continue
-    ┌────────┴────────┐
-    ▼                 ▼
-  [END]          ┌─────────┐
-                 │ content │
-                 └────┬────┘
-              error   │   continue
-             ┌────────┴────────┐
-             ▼                 ▼
-           [END]      ┌───────────────┐
-                      │ check_history │
-                      └───┬───────┬───┘
-              has_data    │       │    no_data
-                     ┌────┘       └────┐
-                     ▼                 ▼
-               ┌──────────┐    ┌───────────────┐
-               │ feedback │    │ skip_feedback │
-               └────┬─────┘    └───────┬───────┘
-                    └────────┬─────────┘
-                             ▼
-                           [END]
-```
+![Orchestration graph](assets/graph.png)
 
 `check_history` exists because feedback on a profile with no logged engagement is meaningless. Asking a model for a data-driven analysis of zero data invites it to invent numbers. The graph routes to `skip_feedback` instead and says so; `feedback_available` in the response tells the caller which branch ran.
 
@@ -157,9 +177,13 @@ PersonaAI/
 - **Feedback loop** — analyses recorded engagement and recommends specific changes, referencing actual post topics and numbers
 - **Prompt versioning** — templates stored in the database, with rollback to any prior version
 - **Audit logging** — every LLM call recorded with a trace ID, model, prompt version, latency and status
+
 - **API security** — bearer token auth, per-endpoint rate limiting, HTML escaping on all rendered model output
 - **Prometheus metrics** — request counts, latency histograms and error rates at `/metrics`
 - **Streamlit dashboard** — engagement trends and audit log inspection
+
+![Streamlit observability dashboard](assets/streamlit.png)
+
 - **Docker deployment** — `docker-compose` with a named volume and health checks
 
 ---
@@ -177,13 +201,13 @@ PersonaAI/
 cd PersonaAI
 
 python -m venv venv
-# source venv/bin/activate     # macOS / Linux
-venv\Scripts\activate      # Windows
+source venv/bin/activate     # macOS / Linux
+# venv\Scripts\activate      # Windows
 
 pip install -r requirements.txt
 
-# cp .env.template .env        # macOS / Linux
-copy .env.template .env    # Windows
+cp .env.template .env        # macOS / Linux
+# copy .env.template .env    # Windows
 ```
 
 Open `.env` and set both keys. `API_KEY` is required — the app refuses to start without it rather than falling back to a default value. Generate one with:
@@ -291,11 +315,3 @@ Stated plainly, because they shape how the results should be read:
 - **Agent reliability varies.** Llama 3.3 70B occasionally skips a tool call in a three-step chain. The fallback path covers this, but `execution_mode` is worth checking when a run looks unusual.
 
 ---
-
-## Author
-
-Built as a semester project.
-
-## License
-
-MIT
