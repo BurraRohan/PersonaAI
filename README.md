@@ -201,13 +201,13 @@ PersonaAI/
 cd PersonaAI
 
 python -m venv venv
-source venv/bin/activate     # macOS / Linux
-# venv\Scripts\activate      # Windows
+# source venv/bin/activate     # macOS / Linux
+venv\Scripts\activate      # Windows
 
 pip install -r requirements.txt
 
-cp .env.template .env        # macOS / Linux
-# copy .env.template .env    # Windows
+# cp .env.template .env        # macOS / Linux
+copy .env.template .env    # Windows
 ```
 
 Open `.env` and set both keys. `API_KEY` is required — the app refuses to start without it rather than falling back to a default value. Generate one with:
