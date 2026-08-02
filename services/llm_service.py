@@ -306,8 +306,9 @@ def predict_engagement(draft_content: str, brand_profile: dict,
     start = time.time()
 
     prompt_version = 0
+    template = None
     if db:
-        _, prompt_version = get_active_prompt(db, "predictor")
+        template, prompt_version = get_active_prompt(db, "predictor")
 
     avg_likes = 0
     avg_comments = 0
@@ -321,7 +322,16 @@ def predict_engagement(draft_content: str, brand_profile: dict,
     if not engagement_history:
         history_context = "No previous engagement data available."
 
-    prompt = f"""You are a LinkedIn content performance analyst.
+    if template:
+        prompt = template.format(
+            tone=brand_profile.get("tone", ""),
+            content_themes=json.dumps(brand_profile.get("content_themes", [])),
+            positioning=brand_profile.get("positioning_summary", ""),
+            history_context=history_context,
+            draft_content=draft_content,
+        )
+    else:
+        prompt = f"""You are a LinkedIn content performance analyst.
 Analyze the following draft LinkedIn post and predict how it will perform.
 Use the brand profile and past engagement data for context.
 

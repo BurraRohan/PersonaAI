@@ -3,6 +3,8 @@ PersonaAI – Streamlit Observability Dashboard
 Run: streamlit run streamlit_dashboard.py
 """
 
+import os
+
 import streamlit as st
 import sqlite3
 import pandas as pd
@@ -11,7 +13,7 @@ from datetime import datetime
 st.set_page_config(page_title="PersonaAI Dashboard", layout="wide")
 st.title("PersonaAI – Observability Dashboard")
 
-DB_PATH = "personaai.db"
+DB_PATH = os.getenv("PERSONAAI_DB_PATH", "personaai.db")
 
 
 def get_connection():

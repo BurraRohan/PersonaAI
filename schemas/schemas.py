@@ -3,18 +3,22 @@ Pydantic schemas for request validation and response serialization.
 """
 
 from datetime import datetime
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, ConfigDict, Field
+
+# Agent execution metadata attached to responses so the tool-calling trace
+# is visible to callers instead of only living in the server logs.
+AgentTrace = List[Dict[str, Any]]
 
 
 # ── Brand Endpoint ──────────────────────────────────────────────
 
 class BrandRequest(BaseModel):
-    name: str = Field(..., example="Alice Johnson")
-    role: str = Field(..., example="ML Engineer")
-    industry: str = Field(..., example="AI/ML")
-    goals: str = Field(..., example="Thought leadership and community building")
-    preferred_tone: str = Field(..., example="Professional yet approachable")
+    name: str = Field(..., json_schema_extra={"example": "Alice Johnson"})
+    role: str = Field(..., json_schema_extra={"example": "ML Engineer"})
+    industry: str = Field(..., json_schema_extra={"example": "AI/ML"})
+    goals: str = Field(..., json_schema_extra={"example": "Thought leadership and community building"})
+    preferred_tone: str = Field(..., json_schema_extra={"example": "Professional yet approachable"})
 
 
 class BrandResponse(BaseModel):
@@ -30,34 +34,36 @@ class BrandResponse(BaseModel):
     do_guidelines: Optional[List[str]] = None
     dont_guidelines: Optional[List[str]] = None
     created_at: datetime
+    execution_mode: str = "agent"
+    agent_trace: AgentTrace = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Content Generation Endpoint ─────────────────────────────────
 
 class GenerateRequest(BaseModel):
-    user_id: int = Field(..., example=1)
-    topic: str = Field(..., example="Why fine-tuning matters more than prompt engineering")
+    user_id: int = Field(..., json_schema_extra={"example": 1})
+    topic: str = Field(..., json_schema_extra={"example": "Why fine-tuning matters more than prompt engineering"})
 
 
 class GenerateResponse(BaseModel):
     post_id: int
     post_content: str
     suggested_hashtags: Optional[List[str]] = None
+    execution_mode: str = "agent"
+    agent_trace: AgentTrace = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Engagement Tracking Endpoint ────────────────────────────────
 
 class EngagementRequest(BaseModel):
-    post_id: int = Field(..., example=1)
-    likes: int = Field(0, ge=0, example=42)
-    comments: int = Field(0, ge=0, example=7)
-    shares: int = Field(0, ge=0, example=3)
+    post_id: int = Field(..., json_schema_extra={"example": 1})
+    likes: int = Field(0, ge=0, json_schema_extra={"example": 42})
+    comments: int = Field(0, ge=0, json_schema_extra={"example": 7})
+    shares: int = Field(0, ge=0, json_schema_extra={"example": 3})
 
 
 class EngagementResponse(BaseModel):
@@ -68,14 +74,13 @@ class EngagementResponse(BaseModel):
     shares: int
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Feedback Endpoint ───────────────────────────────────────────
 
 class FeedbackRequest(BaseModel):
-    user_id: int = Field(..., example=1)
+    user_id: int = Field(..., json_schema_extra={"example": 1})
 
 
 class FeedbackResponse(BaseModel):
@@ -83,17 +88,19 @@ class FeedbackResponse(BaseModel):
     total_posts: int
     performance_summary: str
     improvement_recommendation: str
+    execution_mode: str = "agent"
+    agent_trace: AgentTrace = []
 
 
 # ── Orchestration Endpoint (LangGraph) ──────────────────────────
 
 class OrchestrateRequest(BaseModel):
-    name: str = Field(..., example="Alice Johnson")
-    role: str = Field(..., example="ML Engineer")
-    industry: str = Field(..., example="AI/ML")
-    goals: str = Field(..., example="Thought leadership")
-    preferred_tone: str = Field(..., example="Professional yet approachable")
-    topic: str = Field(..., example="Why fine-tuning matters more than prompt engineering")
+    name: str = Field(..., json_schema_extra={"example": "Alice Johnson"})
+    role: str = Field(..., json_schema_extra={"example": "ML Engineer"})
+    industry: str = Field(..., json_schema_extra={"example": "AI/ML"})
+    goals: str = Field(..., json_schema_extra={"example": "Thought leadership"})
+    preferred_tone: str = Field(..., json_schema_extra={"example": "Professional yet approachable"})
+    topic: str = Field(..., json_schema_extra={"example": "Why fine-tuning matters more than prompt engineering"})
 
 
 class OrchestrateResponse(BaseModel):
@@ -103,6 +110,7 @@ class OrchestrateResponse(BaseModel):
     post_content: str
     suggested_hashtags: Optional[List[str]] = None
     feedback_summary: Optional[str] = None
+    feedback_available: bool = False
     workflow_steps: List[str] = []
 
 
@@ -117,12 +125,11 @@ class PromptTemplateResponse(BaseModel):
     description: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class PredictRequest(BaseModel):
-    user_id: int = Field(..., example=1)
-    draft_content: str = Field(..., example="Here's why every engineer should learn about LLMs...")
+    user_id: int = Field(..., json_schema_extra={"example": 1})
+    draft_content: str = Field(..., json_schema_extra={"example": "Here's why every engineer should learn about LLMs..."})
 
 
 class PredictResponse(BaseModel):

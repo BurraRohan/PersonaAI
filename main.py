@@ -131,6 +131,41 @@ Return ONLY the JSON object, no extra text.""",
         ),
     ]
 
+    defaults.append(
+        PromptTemplate(
+            agent_name="predictor",
+            version=1,
+            template="""You are a LinkedIn content performance analyst.
+Analyze the draft post below and predict how it will perform.
+Use the brand profile and past engagement data for context.
+
+Brand Profile:
+  Tone: {tone}
+  Content Themes: {content_themes}
+  Positioning: {positioning}
+
+Past Performance: {history_context}
+
+Draft Post:
+{draft_content}
+
+Return ONLY valid JSON with these keys:
+- "overall_score": integer 1-100 (overall predicted performance)
+- "predicted_likes": string range like "30-50"
+- "predicted_comments": string range like "5-12"
+- "predicted_shares": string range like "2-6"
+- "brand_alignment": integer 1-100 (how well it matches the brand)
+- "hook_strength": integer 1-100 (how strong the opening line is)
+- "readability": integer 1-100 (how easy it is to read)
+- "call_to_action": integer 1-100 (how well it drives engagement)
+- "improvement_tips": string with 3-4 specific actionable tips, separated by newlines
+
+Return ONLY the JSON object, no extra text.""",
+            is_active=True,
+            description="Default engagement prediction prompt v1",
+        )
+    )
+
     for pt in defaults:
         db.add(pt)
     db.commit()
@@ -172,12 +207,21 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS
+# The UI is served by this same app, so a wildcard origin is unnecessary.
+# "*" combined with allow_credentials=True is also rejected outright by browsers.
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:8000,http://127.0.0.1:8000",
+    ).split(",") if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Fix 4: Prometheus metrics
@@ -273,6 +317,7 @@ def orchestrate(request: Request, body: OrchestrateRequest):
         post_content=result.get("post_content", ""),
         suggested_hashtags=result.get("suggested_hashtags", []),
         feedback_summary=result.get("feedback_summary"),
+        feedback_available=result.get("feedback_available", False),
         workflow_steps=result.get("workflow_steps", []),
     )
 

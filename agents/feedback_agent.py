@@ -1,6 +1,9 @@
 """
-Feedback Agent – LangChain agent that analyses engagement history
-and produces strategic recommendations using tools.
+Feedback Agent – ReAct agent that analyses engagement history and recommends
+strategy changes.
+
+The statistics tool does real arithmetic in Python rather than asking the model
+to compute averages, so the numbers the agent reasons over are correct.
 """
 
 import json
@@ -9,115 +12,19 @@ import logging
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from langchain_core.tools import tool
-from langchain_groq import ChatGroq
 from langgraph.prebuilt import create_react_agent
 
-from database.models import BrandProfile, Post, Engagement
+from database.models import BrandProfile, Post
 from schemas.schemas import FeedbackRequest, FeedbackResponse
 from services.llm_service import generate_feedback
+from utils.agent_runtime import build_agent_llm, run_agent, extract_trace, find_tool_result
+from utils.config import AGENT_MODE
 
 logger = logging.getLogger(__name__)
 
 
-# ── LangChain Tools ─────────────────────────────────────────────
-
-@tool
-def fetch_engagement_history(user_id: str) -> str:
-    """Fetch engagement history for all posts by a given user ID.
-    Returns a JSON list of engagement records."""
-    from database.db import SessionLocal
-    db = SessionLocal()
-    try:
-        posts = (
-            db.query(Post)
-            .filter(Post.user_id == int(user_id))
-            .order_by(Post.created_at.desc())
-            .all()
-        )
-        history = []
-        for post in posts:
-            for eng in post.engagements:
-                history.append({
-                    "post_id": post.id,
-                    "topic": post.topic,
-                    "likes": eng.likes,
-                    "comments": eng.comments,
-                    "shares": eng.shares,
-                    "created_at": eng.created_at.isoformat() if eng.created_at else None,
-                })
-        return json.dumps({"total_posts": len(posts), "history": history})
-    finally:
-        db.close()
-
-
-@tool
-def compute_engagement_stats(history_json: str) -> str:
-    """Compute average engagement statistics from engagement history.
-    Input must be a JSON string with a 'history' list."""
-    data = json.loads(history_json)
-    history = data.get("history", [])
-
-    if not history:
-        return json.dumps({"error": "No engagement data available"})
-
-    total = len(history)
-    avg_likes = sum(h["likes"] for h in history) / total
-    avg_comments = sum(h["comments"] for h in history) / total
-    avg_shares = sum(h["shares"] for h in history) / total
-
-    best_post = max(history, key=lambda h: h["likes"] + h["comments"] + h["shares"])
-    worst_post = min(history, key=lambda h: h["likes"] + h["comments"] + h["shares"])
-
-    return json.dumps({
-        "total_entries": total,
-        "avg_likes": round(avg_likes, 1),
-        "avg_comments": round(avg_comments, 1),
-        "avg_shares": round(avg_shares, 1),
-        "best_post_topic": best_post["topic"],
-        "worst_post_topic": worst_post["topic"],
-    })
-
-
-@tool
-def generate_strategy_feedback(input_data: str) -> str:
-    """Generate AI-powered strategy feedback using engagement history and brand context.
-    Input must be a JSON string with 'engagement_history' and 'brand_summary' keys."""
-    data = json.loads(input_data)
-    result = generate_feedback(data["engagement_history"], data["brand_summary"])
-    return json.dumps(result)
-
-
-# ── Agent Setup ─────────────────────────────────────────────────
-
-FEEDBACK_AGENT_PROMPT = """You are a LinkedIn personal branding coach agent.
-
-Your job is to analyse a user's engagement data and provide strategic feedback.
-Follow this process:
-1. Fetch the engagement history for the user
-2. Compute engagement statistics to understand performance
-3. Generate strategic feedback using the data and brand context
-4. Return a comprehensive feedback summary"""
-
-
-def get_feedback_agent():
-    """Create and return the feedback agent."""
-    import os
-    llm = ChatGroq(
-        api_key=os.getenv("GROQ_API_KEY"),
-        model_name="llama-3.3-70b-versatile",
-        temperature=0.3,
-    )
-
-    tools = [fetch_engagement_history, compute_engagement_stats, generate_strategy_feedback]
-    agent = create_react_agent(llm, tools, prompt=FEEDBACK_AGENT_PROMPT)
-
-    return agent
-
-
-# ── Helper ──────────────────────────────────────────────────────
-
-def _build_engagement_history(posts) -> list[dict]:
-    """Flatten posts + engagements into a list of dicts for analysis."""
+def _build_engagement_history(posts) -> list:
+    """Flatten posts and their engagement rows into a list of dicts."""
     history = []
     for post in posts:
         for eng in post.engagements:
@@ -132,23 +39,116 @@ def _build_engagement_history(posts) -> list[dict]:
     return history
 
 
-# ── Public Function (backward-compatible) ───────────────────────
+def _load_history(user_id: int) -> list:
+    from database.db import SessionLocal
+    db = SessionLocal()
+    try:
+        posts = (
+            db.query(Post)
+            .filter(Post.user_id == user_id)
+            .order_by(Post.created_at.desc())
+            .all()
+        )
+        return _build_engagement_history(posts)
+    finally:
+        db.close()
+
+
+# ── Tools ───────────────────────────────────────────────────────
+
+@tool
+def fetch_engagement_history(user_id: int) -> str:
+    """Fetch every logged engagement record for a user's posts.
+
+    Returns JSON with an "entries" count and a "history" list of records
+    containing topic, likes, comments and shares.
+    """
+    history = _load_history(user_id)
+    return json.dumps({"entries": len(history), "history": history})
+
+
+@tool
+def compute_engagement_stats(user_id: int) -> str:
+    """Compute averages and identify the best and worst performing posts.
+
+    Returns JSON with avg_likes, avg_comments, avg_shares, and the topic and
+    total engagement of the best and worst post. Computed in Python, so these
+    numbers are exact.
+    """
+    history = _load_history(user_id)
+    if not history:
+        return json.dumps({"error": "No engagement data logged for this user."})
+
+    total = len(history)
+
+    def score(entry):
+        return entry["likes"] + entry["comments"] + entry["shares"]
+
+    best = max(history, key=score)
+    worst = min(history, key=score)
+
+    return json.dumps({
+        "entries": total,
+        "avg_likes": round(sum(h["likes"] for h in history) / total, 1),
+        "avg_comments": round(sum(h["comments"] for h in history) / total, 1),
+        "avg_shares": round(sum(h["shares"] for h in history) / total, 1),
+        "best_post": {"topic": best["topic"], "total_engagement": score(best)},
+        "worst_post": {"topic": worst["topic"], "total_engagement": score(worst)},
+    })
+
+
+@tool
+def generate_strategy_feedback(user_id: int, brand_summary: str) -> str:
+    """Produce the final written feedback for a user from their engagement history.
+
+    Returns JSON with performance_summary and improvement_recommendation.
+    """
+    history = _load_history(user_id)
+    if not history:
+        return json.dumps({"error": "No engagement data logged for this user."})
+    result = generate_feedback(history, brand_summary)
+    return json.dumps(result)
+
+
+FEEDBACK_AGENT_TOOLS = [
+    fetch_engagement_history,
+    compute_engagement_stats,
+    generate_strategy_feedback,
+]
+
+FEEDBACK_AGENT_PROMPT = """You are a LinkedIn personal-branding coach agent.
+
+Analyse the user's engagement data and produce strategic feedback. Call one
+tool at a time:
+
+1. Call fetch_engagement_history with the user id.
+2. Call compute_engagement_stats with the user id to get exact averages and the
+   best and worst performing posts.
+3. Call generate_strategy_feedback with the user id and the brand summary you
+   were given.
+4. Reply with a one-sentence confirmation.
+
+Never estimate averages yourself. Always take them from compute_engagement_stats."""
+
+
+def get_feedback_agent():
+    """Build the compiled ReAct feedback agent."""
+    return create_react_agent(
+        build_agent_llm(),
+        FEEDBACK_AGENT_TOOLS,
+        prompt=FEEDBACK_AGENT_PROMPT,
+    )
+
+
+# ── Public entry point (used by the API) ────────────────────────
 
 def get_feedback(db: Session, request: FeedbackRequest) -> FeedbackResponse:
-    """Generate feedback for a user based on their engagement history."""
-    logger.info("Generating feedback for user_id=%d", request.user_id)
-
+    """Generate feedback for a user by running the ReAct agent."""
     profile = db.query(BrandProfile).filter(BrandProfile.id == request.user_id).first()
     if not profile:
         raise HTTPException(status_code=404, detail="Brand profile not found.")
 
-    posts = (
-        db.query(Post)
-        .filter(Post.user_id == request.user_id)
-        .order_by(Post.created_at.desc())
-        .all()
-    )
-
+    posts = db.query(Post).filter(Post.user_id == request.user_id).all()
     if not posts:
         raise HTTPException(
             status_code=400,
@@ -156,7 +156,6 @@ def get_feedback(db: Session, request: FeedbackRequest) -> FeedbackResponse:
         )
 
     history = _build_engagement_history(posts)
-
     if not history:
         raise HTTPException(
             status_code=400,
@@ -164,13 +163,58 @@ def get_feedback(db: Session, request: FeedbackRequest) -> FeedbackResponse:
         )
 
     history.sort(key=lambda h: h["created_at"] or "", reverse=True)
-
     brand_summary = f"{profile.name} – {profile.role} in {profile.industry}. Tone: {profile.tone}"
-    llm_result = generate_feedback(history, brand_summary, db=db)
 
+    if not AGENT_MODE:
+        logger.info("AGENT_MODE=0 — direct path for user_id=%d", request.user_id)
+        result = generate_feedback(history, brand_summary, db=db)
+        return FeedbackResponse(
+            user_id=request.user_id,
+            total_posts=len(posts),
+            performance_summary=result.get("performance_summary", ""),
+            improvement_recommendation=result.get("improvement_recommendation", ""),
+            execution_mode="direct",
+            agent_trace=[],
+        )
+
+    logger.info("Running feedback agent for user_id=%d", request.user_id)
+
+    instruction = (
+        f"Analyse engagement and give feedback for brand profile id {request.user_id}.\n"
+        f"brand_summary: {brand_summary}"
+    )
+
+    trace: list = []
+    try:
+        messages = run_agent(get_feedback_agent(), instruction)
+        trace = extract_trace(messages)
+
+        summary = find_tool_result(messages, "generate_strategy_feedback", "performance_summary")
+        recommendation = find_tool_result(
+            messages, "generate_strategy_feedback", "improvement_recommendation"
+        )
+
+        if summary and recommendation:
+            return FeedbackResponse(
+                user_id=request.user_id,
+                total_posts=len(posts),
+                performance_summary=summary,
+                improvement_recommendation=recommendation,
+                execution_mode="agent",
+                agent_trace=trace,
+            )
+
+        logger.warning("Feedback agent returned no structured feedback; using direct path.")
+    except Exception as exc:
+        logger.warning("Feedback agent failed (%s); using direct path.", exc)
+        trace.append({"step": len(trace) + 1, "action": "agent_error", "error": str(exc)[:300]})
+
+    llm_result = generate_feedback(history, brand_summary, db=db)
     return FeedbackResponse(
         user_id=request.user_id,
         total_posts=len(posts),
         performance_summary=llm_result.get("performance_summary", ""),
         improvement_recommendation=llm_result.get("improvement_recommendation", ""),
+        execution_mode="fallback_direct",
+        agent_trace=trace,
     )

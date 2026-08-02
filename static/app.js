@@ -1,7 +1,46 @@
 /* PersonaAI – Frontend Logic v3 (Dashboard Edition) */
 
 const API = '';
-const AUTH_TOKEN = 'testcase1234';
+// -- Auth ------------------------------------------------------
+// The API key is never stored in this file. The user is asked for it once and
+// it is kept in localStorage, so it survives tab closes and browser restarts.
+// Call resetApiKey() from the console to be asked again.
+function getAuthToken() {
+  let token = localStorage.getItem('personaai_key');
+  if (!token) {
+    token = window.prompt('Enter your PersonaAI API key:');
+    if (token) localStorage.setItem('personaai_key', token.trim());
+  }
+  return token ? token.trim() : '';
+}
+
+function clearAuthToken() {
+  localStorage.removeItem('personaai_key');
+}
+
+// Escape hatch: type resetApiKey() in the browser console to re-enter the key.
+window.resetApiKey = function () {
+  clearAuthToken();
+  showToast('API key cleared. It will be requested on your next action.');
+};
+
+// -- HTML escaping ---------------------------------------------
+// Model output is untrusted text. Escape it before it goes near innerHTML,
+// otherwise a topic containing markup will execute in the browser.
+function esc(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Escape first, then render newlines as line breaks.
+function escMultiline(value) {
+  return esc(value).replace(/\n/g, '<br>');
+}
 
 // ── Active Profile (auto-fill) ───────────────────────
 let activeProfileId = null;
@@ -52,13 +91,19 @@ async function apiCall(url, body, method = 'POST') {
     method,
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${AUTH_TOKEN}`
+      'Authorization': `Bearer ${getAuthToken()}`
     },
   };
   if (body && method === 'POST') {
     options.body = JSON.stringify(body);
   }
   const res = await fetch(API + url, options);
+
+  if (res.status === 401 || res.status === 403) {
+    clearAuthToken();  // forget the bad key so the user is prompted again
+    throw new Error('Invalid or missing API key. Try again.');
+  }
+
   const data = await res.json();
   if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
   return data;
@@ -66,14 +111,14 @@ async function apiCall(url, body, method = 'POST') {
 
 function renderField(label, value) {
   return `<div class="result-field">
-    <div class="result-label">${label}</div>
-    <div class="result-value">${value}</div>
+    <div class="result-label">${esc(label)}</div>
+    <div class="result-value">${escMultiline(value)}</div>
   </div>`;
 }
 
 function renderTags(items) {
   if (!items || !items.length) return '<span class="result-value">—</span>';
-  return `<div class="tag-list">${items.map(t => `<span class="tag">${t}</span>`).join('')}</div>`;
+  return `<div class="tag-list">${items.map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>`;
 }
 
 // ── Copy to clipboard ────────────────────────────────
@@ -109,10 +154,10 @@ document.getElementById('dashboard-form').addEventListener('submit', async (e) =
       <!-- Brand Overview -->
       <div class="dash-brand-section">
         <div class="profile-header">
-          <div class="profile-badge">${brandData.name ? brandData.name.charAt(0).toUpperCase() : '?'}</div>
+          <div class="profile-badge">${esc(brandData.name ? brandData.name.charAt(0).toUpperCase() : '?')}</div>
           <div class="profile-info">
-            <div class="profile-name">${brandData.name}</div>
-            <div class="profile-role">${brandData.role} · ${brandData.industry}</div>
+            <div class="profile-name">${esc(brandData.name)}</div>
+            <div class="profile-role">${esc(brandData.role)} · ${esc(brandData.industry)}</div>
           </div>
           <div class="dash-profile-id">Profile #${userId}</div>
         </div>
@@ -191,11 +236,11 @@ document.getElementById('dashboard-form').addEventListener('submit', async (e) =
               <span class="history-post-num">Post #${index + 1}</span>
               <span class="history-post-id">ID: ${post.post_id}</span>
             </div>
-            <div class="history-topic">${post.topic}</div>
-            <div class="history-content">${post.content.length > 200 ? post.content.substring(0, 200) + '...' : post.content}</div>
+            <div class="history-topic">${esc(post.topic)}</div>
+            <div class="history-content">${esc(post.content.length > 200 ? post.content.substring(0, 200) + '...' : post.content)}</div>
             ${post.hashtags && post.hashtags.length > 0 ? `
               <div class="history-hashtags">
-                ${post.hashtags.map(h => `<span class="tag">#${h}</span>`).join('')}
+                ${post.hashtags.map(h => `<span class="tag">#${esc(h)}</span>`).join('')}
               </div>
             ` : ''}
             <div class="history-engagement">
@@ -260,10 +305,10 @@ document.getElementById('brand-form').addEventListener('submit', async (e) => {
     result.innerHTML = `
       <h3>Brand Profile #${data.id}</h3>
       <div class="profile-header">
-        <div class="profile-badge">${data.name ? data.name.charAt(0).toUpperCase() : '?'}</div>
+        <div class="profile-badge">${esc(data.name ? data.name.charAt(0).toUpperCase() : '?')}</div>
         <div class="profile-info">
-          <div class="profile-name">${data.name}</div>
-          <div class="profile-role">${data.role} · ${data.industry}</div>
+          <div class="profile-name">${esc(data.name)}</div>
+          <div class="profile-role">${esc(data.role)} · ${esc(data.industry)}</div>
         </div>
       </div>
       ${renderField('Tone', data.tone || '—')}
@@ -318,7 +363,7 @@ document.getElementById('generate-form').addEventListener('submit', async (e) =>
         </button>
       </div>
       <div class="post-preview">
-        <div class="post-content">${data.post_content}</div>
+        <div class="post-content">${escMultiline(data.post_content)}</div>
       </div>
       <div class="result-field">
         <div class="result-label">Suggested Hashtags</div>
@@ -360,15 +405,15 @@ document.getElementById('predictor-form').addEventListener('submit', async (e) =
         </div>
         <div class="predicted-ranges">
           <div class="stat-card">
-            <div class="stat-number">${data.predicted_likes}</div>
+            <div class="stat-number">${esc(data.predicted_likes)}</div>
             <div class="stat-label">Predicted Likes</div>
           </div>
           <div class="stat-card">
-            <div class="stat-number">${data.predicted_comments}</div>
+            <div class="stat-number">${esc(data.predicted_comments)}</div>
             <div class="stat-label">Predicted Comments</div>
           </div>
           <div class="stat-card">
-            <div class="stat-number">${data.predicted_shares}</div>
+            <div class="stat-number">${esc(data.predicted_shares)}</div>
             <div class="stat-label">Predicted Shares</div>
           </div>
         </div>
