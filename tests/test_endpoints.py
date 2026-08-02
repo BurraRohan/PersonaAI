@@ -101,6 +101,8 @@ class TestBrandEndpoint:
                 FakeTool("save_brand_profile", saved),
             ]
 
+        # Force agent mode on: this test must not depend on the developer's .env.
+        monkeypatch.setattr(ba, "AGENT_MODE", True)
         monkeypatch.setattr(ba, "run_agent", fake_run)
         monkeypatch.setattr(ba, "get_brand_agent", lambda: object())
 
@@ -120,6 +122,7 @@ class TestBrandEndpoint:
         def boom(agent, instruction):
             raise RuntimeError("groq unreachable")
 
+        monkeypatch.setattr(ba, "AGENT_MODE", True)
         monkeypatch.setattr(ba, "run_agent", boom)
         monkeypatch.setattr(ba, "get_brand_agent", lambda: object())
 
