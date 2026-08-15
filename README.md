@@ -2,7 +2,7 @@
 
 A multi-agent system that helps professionals build a consistent LinkedIn personal brand through an end-to-end feedback loop.
 
-Built with **Python, FastAPI, LangChain, LangGraph, Groq (Llama 3.3 70B), SQLAlchemy and Streamlit.**
+Built with **Python, FastAPI, LangChain, LangGraph, Groq, SQLAlchemy and Streamlit.**
 
 ---
 
@@ -284,6 +284,7 @@ Valid `agent_name` values: `brand`, `content`, `feedback`, `predictor`.
 | `API_KEY`           | Bearer token protecting the API                         | Yes      | — (app will not start)                        |
 | `DATABASE_URL`      | SQLAlchemy connection string                            | No       | `sqlite:///./personaai.db`                    |
 | `AGENT_MODE`        | `1` runs the ReAct agents, `0` uses one direct LLM call | No       | `1`                                           |
+| `GROQ_MODEL`        | Groq model used by all agents and LLM calls             | No       | `openai/gpt-oss-120b`                         |
 | `ALLOWED_ORIGINS`   | Comma-separated CORS origins                            | No       | `http://localhost:8000,http://127.0.0.1:8000` |
 | `PERSONAAI_DB_PATH` | SQLite path used by the Streamlit dashboard             | No       | `personaai.db`                                |
 
@@ -293,7 +294,9 @@ Valid `agent_name` values: `brand`, `content`, `feedback`, `predictor`.
 
 **Backend** — Python, FastAPI, SQLAlchemy, SQLite, Pydantic v2
 
-**Agents** — LangChain tools, LangGraph (`create_react_agent` + `StateGraph`), Groq (Llama 3.3 70B)
+**Agents** — LangChain tools, LangGraph (`create_react_agent` + `StateGraph`), Groq
+
+The model is set in one place via `GROQ_MODEL`, so a provider deprecation is a config change rather than a code change. It is not auto-updated: tool-calling reliability differs between models, and the audit log records the model per call so past runs stay reproducible.
 
 **Observability** — Prometheus, Streamlit, database-backed audit logs
 
@@ -312,6 +315,14 @@ Stated plainly, because they shape how the results should be read:
 - **Engagement figures are entered by hand.** Nothing verifies that the numbers logged via `/engagement` match reality.
 - **Single-tenant auth.** One shared API key protects the whole instance. There are no user accounts, and any holder of the key can read every profile.
 - **SQLite concurrency.** Fine for a single instance; a multi-worker deployment under write load should move to PostgreSQL.
-- **Agent reliability varies.** Llama 3.3 70B occasionally skips a tool call in a three-step chain. The fallback path covers this, but `execution_mode` is worth checking when a run looks unusual.
+- **Agent reliability varies.** The model occasionally skips a tool call in a three-step chain. The fallback path covers this, but `execution_mode` is worth checking when a run looks unusual.
 
 ---
+
+## Author
+
+Built as a semester project.
+
+## License
+
+MIT

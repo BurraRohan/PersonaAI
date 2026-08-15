@@ -17,6 +17,7 @@ import pytest
 # Auth requires API_KEY at import time, so set it before importing the app.
 os.environ.setdefault("API_KEY", "test-key-for-pytest")
 os.environ.setdefault("GROQ_API_KEY", "not-used-in-tests")
+os.environ.setdefault("GROQ_MODEL", "openai/gpt-oss-120b")
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 

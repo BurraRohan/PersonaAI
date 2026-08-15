@@ -27,7 +27,7 @@ client = OpenAI(
     base_url="https://api.groq.com/openai/v1",
 )
 
-MODEL = "llama-3.3-70b-versatile"
+from utils.config import GROQ_MODEL as MODEL
 
 MAX_RETRIES = 3
 INITIAL_RETRY_DELAY = 5  # seconds

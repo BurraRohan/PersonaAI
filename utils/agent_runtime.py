@@ -21,7 +21,7 @@ from langchain_groq import ChatGroq
 
 logger = logging.getLogger(__name__)
 
-AGENT_MODEL = "llama-3.3-70b-versatile"
+from utils.config import GROQ_MODEL as AGENT_MODEL
 AGENT_TEMPERATURE = 0.3
 AGENT_RECURSION_LIMIT = 12
 
