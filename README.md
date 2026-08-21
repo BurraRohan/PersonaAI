@@ -155,11 +155,12 @@ PersonaAI/
 │   └── schemas.py           # Pydantic request/response models
 ├── utils/
 │   ├── agent_runtime.py     # Agent execution + tool-call trace capture
+│   ├── config.py            # AGENT_MODE and GROQ_MODEL, read from .env
 │   ├── auth.py              # API key authentication
 │   ├── rate_limiter.py      # Request rate limiting
 │   └── observability.py     # Prometheus metrics + structured logging
 ├── static/                  # Frontend UI (6-tab dashboard)
-├── tests/                   # pytest suite (33 tests, no network required)
+├── tests/                   # pytest suite (35 tests, no network required)
 ├── streamlit_dashboard.py   # Observability dashboard
 ├── Dockerfile
 ├── docker-compose.yml
@@ -184,7 +185,7 @@ PersonaAI/
 
 ![Streamlit observability dashboard](assets/streamlit.png)
 
-- **Docker deployment** — `docker-compose` with a named volume and health checks
+- **Docker packaging** — `docker-compose` with a named volume and health checks
 
 ---
 
@@ -236,7 +237,7 @@ The UI asks for your API key once and keeps it in `localStorage`, so it survives
 pytest -q
 ```
 
-33 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output.
+35 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output.
 
 ### Streamlit dashboard
 
@@ -280,11 +281,11 @@ Valid `agent_name` values: `brand`, `content`, `feedback`, `predictor`.
 
 | Variable | Description | Required | Default |
 | --- | --- | --- | --- |
-| `GROQ_API_KEY` | Groq API key for Llama 3.3 70B | Yes | — |
+| `GROQ_API_KEY` | Groq API key — [console.groq.com/keys](https://console.groq.com/keys) | Yes | — |
 | `API_KEY` | Bearer token protecting the API | Yes | — (app will not start) |
 | `DATABASE_URL` | SQLAlchemy connection string | No | `sqlite:///./personaai.db` |
 | `AGENT_MODE` | `1` runs the ReAct agents, `0` uses one direct LLM call | No | `1` |
-| `GROQ_MODEL` | Groq model used by all agents and LLM calls | No | `openai/gpt-oss-120b` |
+| `GROQ_MODEL` | Groq model used by all agents and LLM calls | Yes | — (app will not start) |
 | `ALLOWED_ORIGINS` | Comma-separated CORS origins | No | `http://localhost:8000,http://127.0.0.1:8000` |
 | `PERSONAAI_DB_PATH` | SQLite path used by the Streamlit dashboard | No | `personaai.db` |
 
@@ -296,13 +297,13 @@ Valid `agent_name` values: `brand`, `content`, `feedback`, `predictor`.
 
 **Agents** — LangChain tools, LangGraph (`create_react_agent` + `StateGraph`), Groq
 
-The model is set in one place via `GROQ_MODEL`, so a provider deprecation is a config change rather than a code change. It is not auto-updated: tool-calling reliability differs between models, and the audit log records the model per call so past runs stay reproducible.
+The model name lives only in `.env` — it is never written into the source, and the app refuses to start without it. A provider deprecation is therefore a one-line config change. It is deliberately not auto-selected: tool-calling reliability differs between models, and the audit log records the model per call, so past runs stay reproducible. Check [Groq's deprecation page](https://console.groq.com/docs/deprecations) for current models.
 
 **Observability** — Prometheus, Streamlit, database-backed audit logs
 
 **Security** — Bearer token auth, SlowAPI rate limiting, output escaping
 
-**Deployment** — Docker, docker-compose, Gunicorn with Uvicorn workers
+**Packaging** — Docker, docker-compose, Gunicorn with Uvicorn workers
 
 ---
 
@@ -316,5 +317,6 @@ Stated plainly, because they shape how the results should be read:
 - **Single-tenant auth.** One shared API key protects the whole instance. There are no user accounts, and any holder of the key can read every profile.
 - **SQLite concurrency.** Fine for a single instance; a multi-worker deployment under write load should move to PostgreSQL.
 - **Agent reliability varies.** The model occasionally skips a tool call in a three-step chain. The fallback path covers this, but `execution_mode` is worth checking when a run looks unusual.
+- **Not deployed.** The project is containerized and runs locally or via `docker-compose`, but there is no hosted instance.
 
 ---
