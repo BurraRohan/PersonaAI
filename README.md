@@ -24,10 +24,10 @@ Define Brand → Generate Post → Predict Engagement → Publish → Log Metric
 
 Every response carries two fields that make this inspectable:
 
-| Field            | Meaning                                                                                                                                                                                    |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Field | Meaning |
+| --- | --- |
 | `execution_mode` | `agent` when the agent ran and persisted its work; `direct` when `AGENT_MODE=0` was set deliberately; `fallback_direct` when the agent failed and the single-call path rescued the request |
-| `agent_trace`    | Ordered list of the tool calls the model chose, and what each returned                                                                                                                     |
+| `agent_trace` | Ordered list of the tool calls the model chose, and what each returned |
 
 A real trace from `POST /brand`, captured from a live run against Groq:
 
@@ -89,10 +89,10 @@ choosing each step from the tool descriptions alone. Tool results longer than
 
 ### Tools available to each agent
 
-| Agent    | Tools                                                                                |
-| -------- | ------------------------------------------------------------------------------------ |
-| Brand    | `check_existing_profile`, `generate_brand_strategy`, `save_brand_profile`            |
-| Content  | `fetch_brand_profile`, `list_recent_topics`, `create_and_save_post`                  |
+| Agent | Tools |
+| --- | --- |
+| Brand | `check_existing_profile`, `generate_brand_strategy`, `save_brand_profile` |
+| Content | `fetch_brand_profile`, `list_recent_topics`, `create_and_save_post` |
 | Feedback | `fetch_engagement_history`, `compute_engagement_stats`, `generate_strategy_feedback` |
 
 `compute_engagement_stats` does its arithmetic in Python rather than asking the model to average numbers, so the statistics the agent reasons over are exact.
@@ -105,10 +105,10 @@ free tier that adds up quickly while developing.
 
 `AGENT_MODE` in `.env` controls this:
 
-| Value         | Behaviour                                         | `execution_mode` in the response |
-| ------------- | ------------------------------------------------- | -------------------------------- |
-| `1` (default) | Runs the ReAct agents; `agent_trace` is populated | `agent`                          |
-| `0`           | One direct LLM call; `agent_trace` is empty       | `direct`                         |
+| Value | Behaviour | `execution_mode` in the response |
+| --- | --- | --- |
+| `1` (default) | Runs the ReAct agents; `agent_trace` is populated | `agent` |
+| `0` | One direct LLM call; `agent_trace` is empty | `direct` |
 
 Endpoints, request bodies and response fields are identical either way, so the
 frontend does not care which mode is active. Restart the server after changing it.
@@ -201,13 +201,13 @@ PersonaAI/
 cd PersonaAI
 
 python -m venv venv
-# source venv/bin/activate     # macOS / Linux
-venv\Scripts\activate      # Windows
+source venv/bin/activate     # macOS / Linux
+# venv\Scripts\activate      # Windows
 
 pip install -r requirements.txt
 
-# cp .env.template .env        # macOS / Linux
-copy .env.template .env    # Windows
+cp .env.template .env        # macOS / Linux
+# copy .env.template .env    # Windows
 ```
 
 Open `.env` and set both keys. `API_KEY` is required — the app refuses to start without it rather than falling back to a default value. Generate one with:
@@ -222,10 +222,10 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 uvicorn main:app --reload
 ```
 
-|                    |                               |
-| ------------------ | ----------------------------- |
-| App UI             | http://127.0.0.1:8000         |
-| Swagger docs       | http://127.0.0.1:8000/docs    |
+| | |
+| --- | --- |
+| App UI | http://127.0.0.1:8000 |
+| Swagger docs | http://127.0.0.1:8000/docs |
 | Prometheus metrics | http://127.0.0.1:8000/metrics |
 
 The UI asks for your API key once and keeps it in `localStorage`, so it survives tab closes and browser restarts. It is never written into the source. To be asked again, type `resetApiKey()` in the browser console.
@@ -256,21 +256,21 @@ docker-compose up --build
 
 Every endpoint except `/health` and `/metrics` requires an `Authorization: Bearer <your-api-key>` header.
 
-| Method | Endpoint                                   | Description                                                | Rate limit |
-| ------ | ------------------------------------------ | ---------------------------------------------------------- | ---------- |
-| POST   | `/brand`                                   | Create a brand profile (brand agent)                       | 10/min     |
-| POST   | `/generate`                                | Generate a LinkedIn post (content agent)                   | 10/min     |
-| POST   | `/predict`                                 | Score a draft before publishing                            | 10/min     |
-| POST   | `/engagement`                              | Log likes, comments and shares for a post                  | 30/min     |
-| POST   | `/feedback`                                | Strategy feedback from engagement history (feedback agent) | 10/min     |
-| POST   | `/orchestrate`                             | Run the full graph: brand → content → feedback             | 5/min      |
-| GET    | `/dashboard/{user_id}`                     | Brand info, totals, averages, best topic, post list        | —          |
-| GET    | `/history/{user_id}`                       | All posts and engagement for a profile                     | —          |
-| GET    | `/prompts/{agent_name}`                    | List prompt versions for an agent                          | —          |
-| POST   | `/prompts/{agent_name}/rollback/{version}` | Activate a specific prompt version                         | —          |
-| GET    | `/audit-logs`                              | Recent LLM calls, filterable by `agent_name`               | —          |
-| GET    | `/metrics`                                 | Prometheus metrics                                         | —          |
-| GET    | `/health`                                  | Health check                                               | —          |
+| Method | Endpoint | Description | Rate limit |
+| --- | --- | --- | --- |
+| POST | `/brand` | Create a brand profile (brand agent) | 10/min |
+| POST | `/generate` | Generate a LinkedIn post (content agent) | 10/min |
+| POST | `/predict` | Score a draft before publishing | 10/min |
+| POST | `/engagement` | Log likes, comments and shares for a post | 30/min |
+| POST | `/feedback` | Strategy feedback from engagement history (feedback agent) | 10/min |
+| POST | `/orchestrate` | Run the full graph: brand → content → feedback | 5/min |
+| GET | `/dashboard/{user_id}` | Brand info, totals, averages, best topic, post list | — |
+| GET | `/history/{user_id}` | All posts and engagement for a profile | — |
+| GET | `/prompts/{agent_name}` | List prompt versions for an agent | — |
+| POST | `/prompts/{agent_name}/rollback/{version}` | Activate a specific prompt version | — |
+| GET | `/audit-logs` | Recent LLM calls, filterable by `agent_name` | — |
+| GET | `/metrics` | Prometheus metrics | — |
+| GET | `/health` | Health check | — |
 
 Valid `agent_name` values: `brand`, `content`, `feedback`, `predictor`.
 
@@ -278,15 +278,15 @@ Valid `agent_name` values: `brand`, `content`, `feedback`, `predictor`.
 
 ## Environment Variables
 
-| Variable            | Description                                             | Required | Default                                       |
-| ------------------- | ------------------------------------------------------- | -------- | --------------------------------------------- |
-| `GROQ_API_KEY`      | Groq API key for Llama 3.3 70B                          | Yes      | —                                             |
-| `API_KEY`           | Bearer token protecting the API                         | Yes      | — (app will not start)                        |
-| `DATABASE_URL`      | SQLAlchemy connection string                            | No       | `sqlite:///./personaai.db`                    |
-| `AGENT_MODE`        | `1` runs the ReAct agents, `0` uses one direct LLM call | No       | `1`                                           |
-| `GROQ_MODEL`        | Groq model used by all agents and LLM calls             | No       | `openai/gpt-oss-120b`                         |
-| `ALLOWED_ORIGINS`   | Comma-separated CORS origins                            | No       | `http://localhost:8000,http://127.0.0.1:8000` |
-| `PERSONAAI_DB_PATH` | SQLite path used by the Streamlit dashboard             | No       | `personaai.db`                                |
+| Variable | Description | Required | Default |
+| --- | --- | --- | --- |
+| `GROQ_API_KEY` | Groq API key for Llama 3.3 70B | Yes | — |
+| `API_KEY` | Bearer token protecting the API | Yes | — (app will not start) |
+| `DATABASE_URL` | SQLAlchemy connection string | No | `sqlite:///./personaai.db` |
+| `AGENT_MODE` | `1` runs the ReAct agents, `0` uses one direct LLM call | No | `1` |
+| `GROQ_MODEL` | Groq model used by all agents and LLM calls | No | `openai/gpt-oss-120b` |
+| `ALLOWED_ORIGINS` | Comma-separated CORS origins | No | `http://localhost:8000,http://127.0.0.1:8000` |
+| `PERSONAAI_DB_PATH` | SQLite path used by the Streamlit dashboard | No | `personaai.db` |
 
 ---
 
@@ -318,11 +318,3 @@ Stated plainly, because they shape how the results should be read:
 - **Agent reliability varies.** The model occasionally skips a tool call in a three-step chain. The fallback path covers this, but `execution_mode` is worth checking when a run looks unusual.
 
 ---
-
-## Author
-
-Built as a semester project.
-
-## License
-
-MIT
