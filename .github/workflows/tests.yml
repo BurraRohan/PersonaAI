@@ -15,8 +15,11 @@ jobs:
     # (it is gitignored, correctly). These are throwaway values: the test suite
     # stubs the Groq boundary, so no network call is ever made and no real
     # secret is needed here.
+    #
+    # They must match the values the tests set in tests/conftest-style headers,
+    # so an authenticated request in CI is not rejected as a bad key.
     env:
-      API_KEY: test-key-for-ci
+      API_KEY: test-key-for-pytest
       GROQ_API_KEY: not-used-in-tests
       GROQ_MODEL: openai/gpt-oss-120b
       AGENT_MODE: 1

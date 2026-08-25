@@ -12,9 +12,12 @@ import sys
 
 import pytest
 
-os.environ.setdefault("API_KEY", "test-key-for-pytest")
-os.environ.setdefault("GROQ_API_KEY", "not-used-in-tests")
-os.environ.setdefault("GROQ_MODEL", "openai/gpt-oss-120b")
+# Set, not setdefault: the suite must use its own values even when the ambient
+# environment (CI, a shell export, a .env already loaded) has different ones.
+# setdefault silently loses that race and every authenticated request 403s.
+os.environ["API_KEY"] = "test-key-for-pytest"
+os.environ["GROQ_API_KEY"] = "not-used-in-tests"
+os.environ["GROQ_MODEL"] = "openai/gpt-oss-120b"
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
