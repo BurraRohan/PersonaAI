@@ -1,0 +1,40 @@
+name: tests
+
+# Run on every push and pull request to main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+
+    # The app refuses to start without these, and GitHub's runner has no .env
+    # (it is gitignored, correctly). These are throwaway values: the test suite
+    # stubs the Groq boundary, so no network call is ever made and no real
+    # secret is needed here.
+    env:
+      API_KEY: test-key-for-ci
+      GROQ_API_KEY: not-used-in-tests
+      GROQ_MODEL: openai/gpt-oss-120b
+      AGENT_MODE: 1
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest -q
