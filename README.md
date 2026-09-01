@@ -1,4 +1,8 @@
 [![tests](https://github.com/BurraRohan/PersonaAI/actions/workflows/tests.yml/badge.svg)](https://github.com/BurraRohan/PersonaAI/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/python-3.10+-blue)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 # PersonaAI – Personal Branding Intelligence Agent
 
