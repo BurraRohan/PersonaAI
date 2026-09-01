@@ -157,3 +157,140 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
   .engagement-stats, .history-summary { grid-template-columns: repeat(2, 1fr); }
   .feedback-section, .predictor-top { flex-direction: column; }
 }
+/* ── Human-in-the-loop review ─────────────────────────────── */
+
+.label-note {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--text-dim, #94a3b8);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.pending-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  border-radius: 10px;
+  background: rgba(251, 191, 36, 0.07);
+  font-size: 0.9rem;
+  color: #fbbf24;
+}
+
+.pending-item {
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.6rem;
+  border: 1px solid var(--border, #1e293b);
+  border-radius: 10px;
+  background: var(--panel-alt, rgba(148, 163, 184, 0.04));
+}
+
+.pending-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.35rem;
+}
+
+.pending-preview {
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--text-dim, #94a3b8);
+  margin-bottom: 0.6rem;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.status-pending {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.4);
+}
+
+.status-approved {
+  background: rgba(52, 211, 153, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.4);
+}
+
+.status-rejected {
+  background: rgba(248, 113, 113, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.4);
+}
+
+.decision-panel {
+  margin-top: 1.25rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--border, #1e293b);
+  border-radius: 12px;
+  background: var(--panel-alt, rgba(148, 163, 184, 0.04));
+}
+
+.decision-panel.note-only {
+  font-size: 0.86rem;
+  color: var(--text-dim, #94a3b8);
+  line-height: 1.55;
+}
+
+.status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.85rem;
+}
+
+.status-note {
+  font-size: 0.85rem;
+  color: var(--text-dim, #94a3b8);
+}
+
+.decision-actions {
+  display: flex;
+  gap: 0.7rem;
+  margin-top: 0.85rem;
+}
+
+.btn-approve {
+  background: #059669;
+}
+
+.btn-approve:hover {
+  background: #047857;
+}
+
+.btn-reject {
+  background: #b91c1c;
+}
+
+.btn-reject:hover {
+  background: #991b1b;
+}
+
+.btn-ghost {
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--border, #1e293b);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text, #e2e8f0);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.btn-ghost:hover {
+  border-color: var(--accent, #6366f1);
+  color: var(--accent, #818cf8);
+}

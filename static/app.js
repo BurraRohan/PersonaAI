@@ -235,6 +235,7 @@ document.getElementById('dashboard-form').addEventListener('submit', async (e) =
             <div class="history-card-header">
               <span class="history-post-num">Post #${index + 1}</span>
               <span class="history-post-id">ID: ${post.post_id}</span>
+              ${post.status ? `<span class="status-badge status-${esc(post.status)}">${esc(post.status)}</span>` : ''}
             </div>
             <div class="history-topic">${esc(post.topic)}</div>
             <div class="history-content">${esc(post.content.length > 200 ? post.content.substring(0, 200) + '...' : post.content)}</div>
@@ -388,10 +389,21 @@ document.getElementById('predictor-form').addEventListener('submit', async (e) =
   result.classList.add('hidden');
 
   try {
-    const data = await apiCall('/predict', {
-      user_id: parseInt(document.getElementById('pred-user-id').value),
-      draft_content: document.getElementById('pred-draft').value,
-    });
+    const postIdRaw = document.getElementById('pred-post-id').value.trim();
+    const draftRaw = document.getElementById('pred-draft').value.trim();
+
+    if (!postIdRaw && !draftRaw) {
+      throw new Error('Enter a Post ID or paste a draft to evaluate.');
+    }
+
+    const payload = { user_id: parseInt(document.getElementById('pred-user-id').value) };
+    if (postIdRaw) {
+      payload.post_id = parseInt(postIdRaw);
+    } else {
+      payload.draft_content = draftRaw;
+    }
+
+    const data = await apiCall('/predict', payload);
 
     const score = data.overall_score;
     const scoreColor = score >= 70 ? 'score-high' : score >= 40 ? 'score-mid' : 'score-low';
@@ -433,15 +445,158 @@ document.getElementById('predictor-form').addEventListener('submit', async (e) =
           ${renderField('Improvement Tips', data.improvement_tips)}
         </div>
       </div>
+
+      ${renderDecisionPanel(data)}
     `;
     result.classList.remove('hidden');
-    showToast(`Predicted score: ${score}/100`);
+    wireDecisionButtons(data.post_id);
+    showToast(`Score: ${score}/100`);
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
     setLoading(btn, false);
   }
 });
+
+// ── Human-in-the-loop review ──────────────────────────────────
+// A score on its own decides nothing. When a saved post was evaluated, the
+// person approves or rejects it here, and that decision is what gates the
+// rest of the pipeline.
+
+const STATUS_LABEL = {
+  pending: 'Awaiting review',
+  approved: 'Approved',
+  rejected: 'Rejected',
+};
+
+function renderDecisionPanel(data) {
+  if (!data.post_id) {
+    return `
+      <div class="decision-panel note-only">
+        Pasted text is scored but not saved, so there is nothing to approve.
+        Enter a Post ID to evaluate a generated post.
+      </div>`;
+  }
+
+  const status = data.status || 'pending';
+
+  if (status !== 'pending') {
+    return `
+      <div class="decision-panel">
+        <div class="status-row">
+          <span class="status-badge status-${esc(status)}">${esc(STATUS_LABEL[status] || status)}</span>
+          <span class="status-note">Post #${esc(data.post_id)} has already been reviewed.</span>
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div class="decision-panel" id="decision-panel">
+      <div class="status-row">
+        <span class="status-badge status-pending">${esc(STATUS_LABEL.pending)}</span>
+        <span class="status-note">Post #${esc(data.post_id)} will not enter the pipeline until you decide.</span>
+      </div>
+      <div class="field full-width">
+        <label for="review-note">Note <span class="label-note">(optional, kept with the decision)</span></label>
+        <input type="text" id="review-note" placeholder="e.g. Too generic, off-brand" />
+      </div>
+      <div class="decision-actions">
+        <button type="button" class="btn btn-approve" id="btn-approve">Approve</button>
+        <button type="button" class="btn btn-reject" id="btn-reject">Reject</button>
+      </div>
+    </div>`;
+}
+
+function wireDecisionButtons(postId) {
+  if (!postId) return;
+
+  const approve = document.getElementById('btn-approve');
+  const reject = document.getElementById('btn-reject');
+  if (!approve || !reject) return;
+
+  const decide = async (decision, btn) => {
+    setLoading(btn, true);
+    try {
+      const noteEl = document.getElementById('review-note');
+      const res = await apiCall(`/posts/${postId}/review`, {
+        decision,
+        note: noteEl && noteEl.value.trim() ? noteEl.value.trim() : null,
+      });
+
+      const panel = document.getElementById('decision-panel');
+      if (panel) {
+        panel.innerHTML = `
+          <div class="status-row">
+            <span class="status-badge status-${esc(res.status)}">${esc(STATUS_LABEL[res.status] || res.status)}</span>
+            <span class="status-note">Post #${esc(res.post_id)} marked ${esc(res.status)}.</span>
+          </div>
+          ${res.review_note ? `<div class="status-note">Note: ${esc(res.review_note)}</div>` : ''}`;
+      }
+
+      showToast(`Post ${res.status}`);
+      loadPending();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setLoading(btn, false);
+    }
+  };
+
+  approve.addEventListener('click', () => decide('approve', approve));
+  reject.addEventListener('click', () => decide('reject', reject));
+}
+
+async function loadPending() {
+  const userIdRaw = document.getElementById('pred-user-id').value.trim();
+  const bar = document.getElementById('pending-bar');
+  const count = document.getElementById('pending-count');
+  const list = document.getElementById('pending-list');
+  if (!bar || !count || !list) return;
+
+  if (!userIdRaw) {
+    bar.classList.add('hidden');
+    list.innerHTML = '';
+    return;
+  }
+
+  try {
+    const posts = await apiCall(`/posts/pending/${parseInt(userIdRaw)}`, null, 'GET');
+
+    if (!posts.length) {
+      count.textContent = 'Nothing awaiting review.';
+      bar.classList.remove('hidden');
+      list.innerHTML = '';
+      return;
+    }
+
+    count.textContent = `${posts.length} post${posts.length === 1 ? '' : 's'} awaiting review`;
+    bar.classList.remove('hidden');
+
+    list.innerHTML = posts.map(p => `
+      <div class="pending-item">
+        <div class="pending-head">
+          <span class="status-badge status-pending">#${esc(p.post_id)}</span>
+          <strong>${esc(p.topic)}</strong>
+        </div>
+        <div class="pending-preview">${esc(p.content.slice(0, 160))}${p.content.length > 160 ? '…' : ''}</div>
+        <button type="button" class="btn-ghost pending-pick" data-post="${esc(p.post_id)}">Evaluate this</button>
+      </div>`).join('');
+
+    list.querySelectorAll('.pending-pick').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('pred-post-id').value = btn.dataset.post;
+        document.getElementById('pred-draft').value = '';
+        document.getElementById('predictor-form').requestSubmit();
+      });
+    });
+  } catch (err) {
+    bar.classList.add('hidden');
+    list.innerHTML = '';
+  }
+}
+
+document.getElementById('pending-refresh').addEventListener('click', loadPending);
+document.getElementById('pred-user-id').addEventListener('change', loadPending);
 
 function renderRatingBar(label, value) {
   const color = value >= 70 ? '#34d399' : value >= 40 ? '#fbbf24' : '#f87171';

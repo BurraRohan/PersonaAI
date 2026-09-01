@@ -23,7 +23,7 @@
       <button class="tab active" data-tab="dashboard" role="tab" aria-selected="true">Dashboard</button>
       <button class="tab" data-tab="brand" role="tab">Brand Profile</button>
       <button class="tab" data-tab="generate" role="tab">Generate Post</button>
-      <button class="tab" data-tab="predictor" role="tab">Predictor</button>
+      <button class="tab" data-tab="predictor" role="tab">Evaluate</button>
       <button class="tab" data-tab="engagement" role="tab">Engagement</button>
       <button class="tab" data-tab="feedback" role="tab">Feedback</button>
     </nav>
@@ -99,20 +99,31 @@
 
       <!-- ─── Predictor ─────────────────────────────── -->
       <section id="predictor" class="panel">
-        <h1>Engagement Predictor</h1>
-        <p class="hint">Paste your draft post to predict how it will perform before publishing.</p>
+        <h1>Evaluate</h1>
+        <p class="hint">Score a post before it goes anywhere. Scoring a saved post lets you approve or reject it; pasted text is scored only.</p>
+
+        <div class="pending-bar hidden" id="pending-bar">
+          <span id="pending-count"></span>
+          <button type="button" class="btn-ghost" id="pending-refresh">Refresh</button>
+        </div>
+        <div id="pending-list"></div>
+
         <form id="predictor-form">
           <div class="form-grid">
             <div class="field">
               <label for="pred-user-id">Brand Profile ID</label>
               <input type="number" id="pred-user-id" placeholder="1" min="1" required />
             </div>
+            <div class="field">
+              <label for="pred-post-id">Post ID <span class="label-note">(leave blank to score pasted text)</span></label>
+              <input type="number" id="pred-post-id" placeholder="1" min="1" />
+            </div>
             <div class="field full-width">
-              <label for="pred-draft">Draft Post</label>
-              <textarea id="pred-draft" rows="6" placeholder="Paste your LinkedIn draft here…" required></textarea>
+              <label for="pred-draft">Draft Post <span class="label-note">(ignored when a Post ID is given)</span></label>
+              <textarea id="pred-draft" rows="6" placeholder="Paste your LinkedIn draft here…"></textarea>
             </div>
           </div>
-          <button type="submit" class="btn">Predict Engagement</button>
+          <button type="submit" class="btn">Evaluate Post</button>
         </form>
         <div id="predictor-result" class="result hidden"></div>
       </section>

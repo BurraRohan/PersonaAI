@@ -35,7 +35,7 @@ from utils.auth import verify_api_key
 from utils.rate_limiter import limiter
 from utils.observability import setup_logging, setup_prometheus
 
-from schemas.schemas import PredictRequest, PredictResponse
+from schemas.schemas import PredictRequest, PredictResponse, ReviewRequest
 from services.llm_service import predict_engagement
 from database.models import BrandProfile
 
@@ -48,11 +48,13 @@ logger = logging.getLogger(__name__)
 # ── Seed Default Prompts ────────────────────────────────────────
 
 def seed_default_prompts(db: Session):
-    """Insert default prompt templates if none exist."""
-    existing = db.query(PromptTemplate).first()
-    if existing:
-        return
+    """Insert any default prompt template that is not already in the database.
 
+    Checked per (agent_name, version) rather than "is the table empty", so a new
+    prompt version added in code reaches an existing database on next start.
+    Templates already present are never overwritten — a version that has been
+    rolled back stays rolled back.
+    """
     defaults = [
         PromptTemplate(
             agent_name="brand",
@@ -131,6 +133,9 @@ Return ONLY the JSON object, no extra text.""",
         ),
     ]
 
+    # Predictor v1 — inactive, kept so rollback has a real prior version.
+    # Its literal example ranges were copied into model output instead of being
+    # read as format hints, and it had no rubric, so scores barely varied.
     defaults.append(
         PromptTemplate(
             agent_name="predictor",
@@ -161,15 +166,106 @@ Return ONLY valid JSON with these keys:
 - "improvement_tips": string with 3-4 specific actionable tips, separated by newlines
 
 Return ONLY the JSON object, no extra text.""",
-            is_active=True,
-            description="Default engagement prediction prompt v1",
+            is_active=False,
+            description="v1 — anchored on example ranges, no scoring rubric",
         )
     )
 
+    defaults.append(
+        PromptTemplate(
+            agent_name="predictor",
+            version=2,
+            template="""You are a demanding LinkedIn content analyst. Most posts
+are mediocre, and your scores must reflect that. Grade honestly, not kindly.
+
+Brand Profile:
+  Tone: {tone}
+  Content Themes: {content_themes}
+  Positioning: {positioning}
+
+Past Performance: {history_context}
+
+Draft Post:
+{draft_content}
+
+SCORING RUBRIC — apply it strictly. Use the full range.
+
+  90-100  Exceptional. A specific, surprising claim backed by a concrete number
+          or a first-hand story nobody else could tell.
+  70-89   Strong. Clearly on-brand, has a real insight, but the hook or the
+          ending is soft.
+  50-69   Average. Competent and readable, but generic — could have been written
+          by anyone in this industry.
+  30-49   Weak. Vague, obvious, or announcement-style ("excited to share",
+          "thoughts on the future of X"). No specific detail.
+  1-29    Poor. Off-brand, incoherent, or purely promotional.
+
+A post with no numbers, no story and no concrete claim CANNOT score above 55,
+no matter how well written it is. Do not inflate. If it is generic, say so with
+the score.
+
+Score each dimension independently — they should rarely all be within 10 points
+of each other:
+  brand_alignment  How closely the themes and tone match the profile above.
+  hook_strength    Judge the FIRST LINE alone. Would it stop a scroll?
+  readability      Sentence length, paragraph breaks, jargon density.
+  call_to_action   Does the ending invite a reply, or just trail off?
+
+ENGAGEMENT RANGES — derive these from the past-performance figures above.
+If the history shows an average, scale it by how this post scores: a 40-scoring
+post should land well below that average, a 90-scoring post well above it. If
+there is no history, base the ranges on a small account (single-digit to low
+double-digit likes) rather than assuming reach. Never reuse a range from an
+example; compute it from the numbers you were given.
+
+The four dimension scores are what matter most — the overall score is derived
+from them, so grade each dimension carefully and independently.
+
+Return ONLY valid JSON with these keys:
+- "overall_score": integer 1-100, your own overall read (recalculated from the
+  dimensions afterwards, so do not agonise over it)
+- "predicted_likes": string range, e.g. "<low>-<high>"
+- "predicted_comments": string range
+- "predicted_shares": string range
+- "brand_alignment": integer 1-100
+- "hook_strength": integer 1-100
+- "readability": integer 1-100
+- "call_to_action": integer 1-100
+- "improvement_tips": string, 3-4 specific tips separated by newlines, each
+  naming something in THIS post rather than giving generic advice
+
+Return ONLY the JSON object, no extra text.""",
+            is_active=True,
+            description="v2 — explicit rubric, per-dimension criteria, history-derived ranges",
+        )
+    )
+
+    existing_keys = {
+        (row.agent_name, row.version)
+        for row in db.query(PromptTemplate.agent_name, PromptTemplate.version).all()
+    }
+
+    added = 0
     for pt in defaults:
+        if (pt.agent_name, pt.version) in existing_keys:
+            continue
+
+        # A newly seeded active version supersedes the current active one for
+        # that agent, so two versions are never active at once.
+        if pt.is_active:
+            (
+                db.query(PromptTemplate)
+                .filter(PromptTemplate.agent_name == pt.agent_name,
+                        PromptTemplate.is_active == True)  # noqa: E712
+                .update({"is_active": False})
+            )
+
         db.add(pt)
-    db.commit()
-    logger.info("Seeded %d default prompt templates", len(defaults))
+        added += 1
+
+    if added:
+        db.commit()
+        logger.info("Seeded %d new prompt template(s)", added)
 
 
 # ── Lifespan ────────────────────────────────────────────────────
@@ -268,6 +364,17 @@ def log_engagement(request: Request, body: EngagementRequest, db: Session = Depe
     post = db.query(Post).filter(Post.id == body.post_id).first()
     if not post:
         raise HTTPException(status_code=404, detail="Post not found.")
+
+    # Engagement only makes sense for posts that were actually published, and
+    # a post is only publishable once a human has approved it.
+    if post.status != "approved":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Post {post.id} is {post.status}, not approved. "
+                "Review it in the Evaluate tab before logging engagement."
+            ),
+        )
 
     engagement = Engagement(
         post_id=body.post_id,
@@ -455,6 +562,9 @@ def get_post_history(user_id: int, request: Request, db: Session = Depends(get_d
         "user_id": user_id,
         "brand_name": profile.name,
         "total_posts": len(posts),
+        "pending_posts": pending_count,
+        "approved_posts": approved_count,
+        "rejected_posts": rejected_count,
         "total_likes": total_likes,
         "total_comments": total_comments,
         "total_shares": total_shares,
@@ -493,7 +603,30 @@ def predict(request: Request, body: PredictRequest, db: Session = Depends(get_db
                 "shares": eng.shares,
             })
 
-    result = predict_engagement(body.draft_content, brand_context, history, db=db)
+    # Two input modes. A post_id scores a saved post and makes it approvable;
+    # draft_content alone scores scratch text that is not in the database.
+    scored_post = None
+    if body.post_id is not None:
+        scored_post = (
+            db.query(Post)
+            .filter(Post.id == body.post_id, Post.user_id == body.user_id)
+            .first()
+        )
+        if not scored_post:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Post {body.post_id} not found for brand profile {body.user_id}.",
+            )
+        draft_content = scored_post.content
+    elif body.draft_content:
+        draft_content = body.draft_content
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail="Provide either post_id (to score a saved post) or draft_content.",
+        )
+
+    result = predict_engagement(draft_content, brand_context, history, db=db)
 
     return {
         "overall_score": result.get("overall_score", 50),
@@ -505,6 +638,78 @@ def predict(request: Request, body: PredictRequest, db: Session = Depends(get_db
         "readability": result.get("readability", 50),
         "call_to_action": result.get("call_to_action", 50),
         "improvement_tips": result.get("improvement_tips", ""),
+        "post_id": scored_post.id if scored_post else None,
+        "status": scored_post.status if scored_post else None,
+    }
+
+
+# ── Human-in-the-Loop Review ────────────────────────────
+
+@app.get("/posts/pending/{user_id}", tags=["Review"],
+         dependencies=[Depends(verify_api_key)])
+def list_pending_posts(user_id: int, request: Request, db: Session = Depends(get_db)):
+    """List posts for a profile that are still awaiting a human decision."""
+    from database.models import BrandProfile
+
+    profile = db.query(BrandProfile).filter(BrandProfile.id == user_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Brand profile not found.")
+
+    posts = (
+        db.query(Post)
+        .filter(Post.user_id == user_id, Post.status == "pending")
+        .order_by(Post.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "post_id": p.id,
+            "topic": p.topic,
+            "content": p.content,
+            "status": p.status,
+            "created_at": p.created_at,
+        }
+        for p in posts
+    ]
+
+
+@app.post("/posts/{post_id}/review", tags=["Review"],
+          dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+def review_post(post_id: int, body: ReviewRequest, request: Request,
+                db: Session = Depends(get_db)):
+    """Approve or reject a generated post.
+
+    Nothing is deleted on rejection: the post stays in the database marked
+    "rejected", so there is a record of what the system produced and what a
+    human chose not to use.
+    """
+    from datetime import datetime, timezone
+
+    decision = body.decision.strip().lower()
+    if decision not in {"approve", "reject"}:
+        raise HTTPException(
+            status_code=422,
+            detail='decision must be "approve" or "reject".',
+        )
+
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found.")
+
+    post.status = "approved" if decision == "approve" else "rejected"
+    post.reviewed_at = datetime.now(timezone.utc)
+    post.review_note = body.note
+    db.commit()
+    db.refresh(post)
+
+    logger.info("Post %d marked %s", post.id, post.status)
+
+    return {
+        "post_id": post.id,
+        "status": post.status,
+        "reviewed_at": post.reviewed_at,
+        "review_note": post.review_note,
     }
 
 # ── Dashboard Endpoint ──────────────────────────────────
@@ -562,11 +767,16 @@ def get_dashboard(user_id: int, request: Request, db: Session = Depends(get_db))
             "topic": post.topic,
             "content": post.content,
             "hashtags": hashtags,
+            "status": post.status,
             "likes": likes,
             "comments": comments,
             "shares": shares,
             "created_at": post.created_at.isoformat() if post.created_at else None,
         })
+
+    pending_count = sum(1 for p in posts if p.status == "pending")
+    approved_count = sum(1 for p in posts if p.status == "approved")
+    rejected_count = sum(1 for p in posts if p.status == "rejected")
 
     num_posts = len(posts) if posts else 1  # avoid division by zero
 
@@ -587,6 +797,9 @@ def get_dashboard(user_id: int, request: Request, db: Session = Depends(get_db))
         "positioning_summary": profile.positioning_summary,
         "content_themes": content_themes,
         "total_posts": len(posts),
+        "pending_posts": pending_count,
+        "approved_posts": approved_count,
+        "rejected_posts": rejected_count,
         "total_likes": total_likes,
         "total_comments": total_comments,
         "total_shares": total_shares,

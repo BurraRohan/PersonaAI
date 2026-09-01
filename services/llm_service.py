@@ -299,6 +299,34 @@ Return ONLY the JSON object, no extra text."""
 
     return result
 
+# Weights reflect what actually drives LinkedIn engagement: nothing else matters
+# if the first line does not stop the scroll, and a post with no ask rarely gets
+# comments. Readability and brand fit are necessary but not sufficient.
+SCORE_WEIGHTS = {
+    "hook_strength": 0.35,
+    "call_to_action": 0.25,
+    "brand_alignment": 0.20,
+    "readability": 0.20,
+}
+
+
+def _composite_score(result: dict) -> int:
+    """Derive overall_score from the four dimension scores.
+
+    Falls back to whatever the model returned if the dimensions are missing or
+    unusable, so a malformed response still yields something rather than 0.
+    """
+    try:
+        total = 0.0
+        for key, weight in SCORE_WEIGHTS.items():
+            value = float(result.get(key, 0))
+            total += max(0.0, min(100.0, value)) * weight
+        score = int(round(total))
+        return max(1, min(100, score))
+    except (TypeError, ValueError):
+        return int(result.get("overall_score", 50))
+
+
 def predict_engagement(draft_content: str, brand_profile: dict,
                        engagement_history: list, db: Session = None) -> dict:
     """Predict engagement for a draft post based on brand and history."""
@@ -361,6 +389,14 @@ Return ONLY the JSON object, no extra text."""
     logger.info("[%s] Predicting engagement for draft", trace_id)
     text = _call_with_retry(prompt, trace_id)
     result = _parse_json_response(text)
+
+    # The model judges each dimension well but is unreliable at combining them:
+    # it will rate hook 30 and call-to-action 35, then still return an overall
+    # score in the 70s. So the composite is computed here instead, from the
+    # dimensions the model did score. Same reasoning as compute_engagement_stats
+    # doing its arithmetic in Python rather than asking the model to average.
+    result["overall_score"] = _composite_score(result)
+
     latency = (time.time() - start) * 1000
 
     if db:

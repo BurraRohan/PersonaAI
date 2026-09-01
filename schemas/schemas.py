@@ -129,7 +129,13 @@ class PromptTemplateResponse(BaseModel):
 
 class PredictRequest(BaseModel):
     user_id: int = Field(..., json_schema_extra={"example": 1})
-    draft_content: str = Field(..., json_schema_extra={"example": "Here's why every engineer should learn about LLMs..."})
+    # Either score a saved post by id (which then becomes approvable), or paste
+    # free text for a scratch draft that is not in the database.
+    post_id: Optional[int] = Field(None, json_schema_extra={"example": 1})
+    draft_content: Optional[str] = Field(
+        None,
+        json_schema_extra={"example": "Here's why every engineer should learn about LLMs..."},
+    )
 
 
 class PredictResponse(BaseModel):
@@ -142,4 +148,33 @@ class PredictResponse(BaseModel):
     readability: int
     call_to_action: int
     improvement_tips: str
+    # Present only when a saved post was scored. The UI shows approve/reject
+    # controls when post_id is not None.
+    post_id: Optional[int] = None
+    status: Optional[str] = None
 
+
+class ReviewRequest(BaseModel):
+    """Approve or reject a generated post."""
+
+    decision: str = Field(..., json_schema_extra={"example": "approve"})
+    note: Optional[str] = Field(
+        None, json_schema_extra={"example": "Too generic, off-brand"}
+    )
+
+
+class ReviewResponse(BaseModel):
+    post_id: int
+    status: str
+    reviewed_at: Optional[datetime] = None
+    review_note: Optional[str] = None
+
+
+class PendingPost(BaseModel):
+    post_id: int
+    topic: str
+    content: str
+    status: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

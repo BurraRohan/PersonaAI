@@ -44,6 +44,13 @@ class Post(Base):
     content = Column(Text, nullable=False)
     hashtags = Column(Text, nullable=True)
 
+    # Human-in-the-loop review state: "pending", "approved" or "rejected".
+    # Generated posts start pending; nothing enters the engagement pipeline
+    # until a person has looked at it and decided.
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    reviewed_at = Column(DateTime, nullable=True)
+    review_note = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     brand_profile = relationship("BrandProfile", back_populates="posts")

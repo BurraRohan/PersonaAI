@@ -148,11 +148,21 @@ def get_feedback(db: Session, request: FeedbackRequest) -> FeedbackResponse:
     if not profile:
         raise HTTPException(status_code=404, detail="Brand profile not found.")
 
-    posts = db.query(Post).filter(Post.user_id == request.user_id).all()
+    # Only approved posts count. Rejected drafts were deliberately not used,
+    # and pending ones have not been reviewed yet, so neither should shape
+    # strategy advice.
+    posts = (
+        db.query(Post)
+        .filter(Post.user_id == request.user_id, Post.status == "approved")
+        .all()
+    )
     if not posts:
         raise HTTPException(
             status_code=400,
-            detail="No posts found for this user. Generate content first via POST /generate.",
+            detail=(
+                "No approved posts found for this user. Generate content via "
+                "POST /generate, then approve it in the Evaluate tab."
+            ),
         )
 
     history = _build_engagement_history(posts)

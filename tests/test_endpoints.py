@@ -210,3 +210,213 @@ class TestAgentModeSwitch:
         for field in ("id", "name", "role", "tone", "content_themes",
                       "positioning_summary", "execution_mode", "agent_trace"):
             assert field in body
+
+class TestReviewGate:
+    """Human-in-the-loop: generated posts need a decision before they count."""
+
+    def _make_post(self, client, status="pending"):
+        """Create a profile and a post directly, bypassing the LLM."""
+        from database.db import SessionLocal
+        from database.models import BrandProfile, Post
+
+        db = SessionLocal()
+        try:
+            profile = BrandProfile(
+                name="Review Tester", role="SDE", industry="Auto",
+                goals="Authority", preferred_tone="Direct",
+                tone="Direct", content_themes='["AI"]',
+                positioning_summary="Ships things.",
+                do_guidelines='["Be specific"]', dont_guidelines='["Be vague"]',
+            )
+            db.add(profile)
+            db.commit()
+            db.refresh(profile)
+
+            post = Post(
+                user_id=profile.id, topic="Test topic",
+                content="Test content for review.", hashtags='["test"]',
+                status=status,
+            )
+            db.add(post)
+            db.commit()
+            db.refresh(post)
+            return profile.id, post.id
+        finally:
+            db.close()
+
+    def test_new_posts_start_pending(self, client):
+        _, post_id = self._make_post(client)
+        from database.db import SessionLocal
+        from database.models import Post
+
+        db = SessionLocal()
+        try:
+            assert db.query(Post).filter(Post.id == post_id).first().status == "pending"
+        finally:
+            db.close()
+
+    def test_approve_sets_status_and_timestamp(self, client):
+        _, post_id = self._make_post(client)
+        res = client.post(f"/posts/{post_id}/review",
+                          json={"decision": "approve"}, headers=AUTH)
+        assert res.status_code == 200
+        body = res.json()
+        assert body["status"] == "approved"
+        assert body["reviewed_at"] is not None
+
+    def test_reject_keeps_the_post_with_a_note(self, client):
+        """Rejection is a record, not a delete."""
+        _, post_id = self._make_post(client)
+        res = client.post(f"/posts/{post_id}/review",
+                          json={"decision": "reject", "note": "Too generic"},
+                          headers=AUTH)
+        assert res.status_code == 200
+        assert res.json()["status"] == "rejected"
+        assert res.json()["review_note"] == "Too generic"
+
+        from database.db import SessionLocal
+        from database.models import Post
+        db = SessionLocal()
+        try:
+            assert db.query(Post).filter(Post.id == post_id).first() is not None
+        finally:
+            db.close()
+
+    def test_invalid_decision_is_422(self, client):
+        _, post_id = self._make_post(client)
+        res = client.post(f"/posts/{post_id}/review",
+                          json={"decision": "maybe"}, headers=AUTH)
+        assert res.status_code == 422
+
+    def test_review_missing_post_is_404(self, client):
+        res = client.post("/posts/9999/review",
+                          json={"decision": "approve"}, headers=AUTH)
+        assert res.status_code == 404
+
+    def test_pending_list_only_shows_pending(self, client):
+        user_id, pending_id = self._make_post(client, status="pending")
+
+        from database.db import SessionLocal
+        from database.models import Post
+        db = SessionLocal()
+        try:
+            db.add(Post(user_id=user_id, topic="Approved one",
+                        content="Already reviewed.", status="approved"))
+            db.commit()
+        finally:
+            db.close()
+
+        res = client.get(f"/posts/pending/{user_id}", headers=AUTH)
+        assert res.status_code == 200
+        ids = [p["post_id"] for p in res.json()]
+        assert ids == [pending_id]
+
+    def test_engagement_blocked_until_approved(self, client):
+        """A pending post is not publishable, so it cannot have engagement."""
+        _, post_id = self._make_post(client)
+        res = client.post("/engagement",
+                          json={"post_id": post_id, "likes": 10,
+                                "comments": 2, "shares": 1},
+                          headers=AUTH)
+        assert res.status_code == 409
+        assert "not approved" in res.json()["detail"]
+
+    def test_engagement_allowed_after_approval(self, client):
+        _, post_id = self._make_post(client)
+        client.post(f"/posts/{post_id}/review",
+                    json={"decision": "approve"}, headers=AUTH)
+
+        res = client.post("/engagement",
+                          json={"post_id": post_id, "likes": 10,
+                                "comments": 2, "shares": 1},
+                          headers=AUTH)
+        assert res.status_code == 200
+
+    def test_engagement_blocked_on_rejected(self, client):
+        _, post_id = self._make_post(client, status="rejected")
+        res = client.post("/engagement",
+                          json={"post_id": post_id, "likes": 5,
+                                "comments": 0, "shares": 0},
+                          headers=AUTH)
+        assert res.status_code == 409
+
+
+class TestPredictDualMode:
+    """/predict scores either a saved post or pasted text."""
+
+    def _profile_and_post(self):
+        from database.db import SessionLocal
+        from database.models import BrandProfile, Post
+
+        db = SessionLocal()
+        try:
+            profile = BrandProfile(
+                name="Predict Tester", role="SDE", industry="Auto",
+                goals="Authority", preferred_tone="Direct", tone="Direct",
+                content_themes='["AI"]', positioning_summary="Ships.",
+                do_guidelines='["Specific"]', dont_guidelines='["Vague"]',
+            )
+            db.add(profile)
+            db.commit()
+            db.refresh(profile)
+
+            post = Post(user_id=profile.id, topic="Saved topic",
+                        content="Saved post content.", status="pending")
+            db.add(post)
+            db.commit()
+            db.refresh(post)
+            return profile.id, post.id
+        finally:
+            db.close()
+
+    def test_post_id_returns_review_state(self, client, monkeypatch):
+        import services.llm_service as llm
+        monkeypatch.setattr(llm, "_call_with_retry",
+                            lambda prompt, trace_id=None: json.dumps({
+                                "overall_score": 72, "predicted_likes": "30-50",
+                                "predicted_comments": "5-12", "predicted_shares": "2-6",
+                                "brand_alignment": 80, "hook_strength": 70,
+                                "readability": 75, "call_to_action": 65,
+                                "improvement_tips": "Tighten the opening.",
+                            }))
+
+        user_id, post_id = self._profile_and_post()
+        res = client.post("/predict",
+                          json={"user_id": user_id, "post_id": post_id},
+                          headers=AUTH)
+        assert res.status_code == 200
+        body = res.json()
+        assert body["post_id"] == post_id
+        assert body["status"] == "pending"
+
+    def test_draft_text_has_no_post_id(self, client, monkeypatch):
+        """Pasted text is scored but not approvable."""
+        import services.llm_service as llm
+        monkeypatch.setattr(llm, "_call_with_retry",
+                            lambda prompt, trace_id=None: json.dumps({
+                                "overall_score": 55, "predicted_likes": "10-20",
+                                "predicted_comments": "1-4", "predicted_shares": "0-2",
+                                "brand_alignment": 50, "hook_strength": 60,
+                                "readability": 70, "call_to_action": 40,
+                                "improvement_tips": "Add a hook.",
+                            }))
+
+        user_id, _ = self._profile_and_post()
+        res = client.post("/predict",
+                          json={"user_id": user_id, "draft_content": "Some scratch text."},
+                          headers=AUTH)
+        assert res.status_code == 200
+        assert res.json()["post_id"] is None
+        assert res.json()["status"] is None
+
+    def test_neither_input_is_422(self, client):
+        user_id, _ = self._profile_and_post()
+        res = client.post("/predict", json={"user_id": user_id}, headers=AUTH)
+        assert res.status_code == 422
+
+    def test_post_from_another_profile_is_404(self, client):
+        user_id, post_id = self._profile_and_post()
+        res = client.post("/predict",
+                          json={"user_id": user_id + 999, "post_id": post_id},
+                          headers=AUTH)
+        assert res.status_code in (404,)

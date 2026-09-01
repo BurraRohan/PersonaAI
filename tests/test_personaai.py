@@ -249,3 +249,145 @@ class TestPromptVersioning:
         for agent in ("brand", "content", "feedback", "predictor"):
             template, _ = get_active_prompt(temp_db, agent)
             assert template is not None, f"{agent} has no active prompt"
+
+class TestPredictorPromptV2:
+    """v2 exists to fix two concrete faults in v1."""
+
+    def test_v2_is_active_and_v1_is_kept(self, temp_db):
+        from main import seed_default_prompts
+        from database.models import PromptTemplate
+
+        seed_default_prompts(temp_db)
+        versions = (
+            temp_db.query(PromptTemplate)
+            .filter(PromptTemplate.agent_name == "predictor")
+            .order_by(PromptTemplate.version)
+            .all()
+        )
+        assert [v.version for v in versions] == [1, 2]
+        assert versions[0].is_active is False
+        assert versions[1].is_active is True
+
+    def test_v2_has_no_literal_example_ranges(self, temp_db):
+        """v1 leaked its examples into model output; v2 must not contain them."""
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, version = get_active_prompt(temp_db, "predictor")
+        assert version == 2
+        for leaked in ('"30-50"', '"5-12"', '"2-6"'):
+            assert leaked not in template
+
+    def test_v2_defines_score_bands(self, temp_db):
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, _ = get_active_prompt(temp_db, "predictor")
+        assert "SCORING RUBRIC" in template
+        for band in ("90-100", "70-89", "50-69", "30-49", "1-29"):
+            assert band in template
+
+
+class TestPromptSeedingIsVersionAware:
+    """A new prompt version in code must reach a database that already has old ones."""
+
+    def test_new_version_is_added_to_existing_db(self, temp_db):
+        from database.models import PromptTemplate
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        # A database that predates v2.
+        temp_db.add(PromptTemplate(agent_name="predictor", version=1,
+                                   template="old v1", is_active=True))
+        temp_db.commit()
+
+        seed_default_prompts(temp_db)
+
+        _, version = get_active_prompt(temp_db, "predictor")
+        assert version == 2
+
+    def test_existing_template_is_not_overwritten(self, temp_db):
+        """A version already in the database keeps its own text."""
+        from database.models import PromptTemplate
+        from main import seed_default_prompts
+
+        temp_db.add(PromptTemplate(agent_name="brand", version=1,
+                                   template="MY EDITED PROMPT", is_active=True))
+        temp_db.commit()
+
+        seed_default_prompts(temp_db)
+
+        row = (temp_db.query(PromptTemplate)
+               .filter(PromptTemplate.agent_name == "brand",
+                       PromptTemplate.version == 1)
+               .first())
+        assert row.template == "MY EDITED PROMPT"
+
+    def test_only_one_version_active_per_agent(self, temp_db):
+        from database.models import PromptTemplate
+        from main import seed_default_prompts
+
+        temp_db.add(PromptTemplate(agent_name="predictor", version=1,
+                                   template="old v1", is_active=True))
+        temp_db.commit()
+        seed_default_prompts(temp_db)
+
+        active = (temp_db.query(PromptTemplate)
+                  .filter(PromptTemplate.agent_name == "predictor",
+                          PromptTemplate.is_active == True)  # noqa: E712
+                  .all())
+        assert len(active) == 1
+        assert active[0].version == 2
+
+    def test_seeding_twice_adds_nothing(self, temp_db):
+        from database.models import PromptTemplate
+        from main import seed_default_prompts
+
+        seed_default_prompts(temp_db)
+        first = temp_db.query(PromptTemplate).count()
+        seed_default_prompts(temp_db)
+        assert temp_db.query(PromptTemplate).count() == first
+
+
+class TestCompositeScore:
+    """overall_score is derived in Python, not taken from the model."""
+
+    def test_weak_dimensions_produce_a_low_score(self):
+        """Real case: the model rated hook 30 / CTA 35 and still returned 73."""
+        from services.llm_service import _composite_score
+        weak = {"hook_strength": 30, "call_to_action": 35,
+                "brand_alignment": 85, "readability": 70, "overall_score": 73}
+        assert _composite_score(weak) == 50
+
+    def test_strong_hook_lifts_the_score(self):
+        from services.llm_service import _composite_score
+        strong = {"hook_strength": 92, "call_to_action": 30,
+                  "brand_alignment": 85, "readability": 80, "overall_score": 78}
+        assert _composite_score(strong) == 73
+
+    def test_scores_are_spread_not_clustered(self):
+        from services.llm_service import _composite_score
+        scores = [
+            _composite_score({"hook_strength": 92, "call_to_action": 30,
+                              "brand_alignment": 85, "readability": 80}),
+            _composite_score({"hook_strength": 60, "call_to_action": 45,
+                              "brand_alignment": 88, "readability": 80}),
+            _composite_score({"hook_strength": 30, "call_to_action": 35,
+                              "brand_alignment": 85, "readability": 70}),
+        ]
+        assert max(scores) - min(scores) >= 20
+
+    def test_weights_sum_to_one(self):
+        from services.llm_service import SCORE_WEIGHTS
+        assert abs(sum(SCORE_WEIGHTS.values()) - 1.0) < 1e-9
+
+    def test_out_of_range_values_are_clamped(self):
+        from services.llm_service import _composite_score
+        assert 1 <= _composite_score({"hook_strength": 500, "call_to_action": -20,
+                                      "brand_alignment": 50, "readability": 50}) <= 100
+
+    def test_missing_dimensions_fall_back(self):
+        from services.llm_service import _composite_score
+        assert _composite_score({"overall_score": 61}) >= 1
