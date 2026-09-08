@@ -1,10 +1,14 @@
 [![tests](https://github.com/BurraRohan/PersonaAI/actions/workflows/tests.yml/badge.svg)](https://github.com/BurraRohan/PersonaAI/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/python-3.10+-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C)
+![Groq](https://img.shields.io/badge/Groq-F55036?logo=groq&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)
+![License](https://img.shields.io/badge/license-MIT-green)
 
 # PersonaAI – Personal Branding Intelligence Agent
 
 A multi-agent system that helps professionals build a consistent LinkedIn personal brand through an end-to-end feedback loop.
-
-Built with **Python, FastAPI, LangChain, LangGraph, Groq, SQLAlchemy and Streamlit.**
 
 ---
 
