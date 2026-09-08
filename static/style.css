@@ -294,3 +294,103 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
   border-color: var(--accent, #6366f1);
   color: var(--accent, #818cf8);
 }
+
+/* ── Post detail modal & profile delete ───────────────────── */
+
+.button-row { display: flex; gap: 0.7rem; flex-wrap: wrap; }
+
+.btn-danger { background: #b91c1c; }
+.btn-danger:hover { background: #991b1b; }
+
+.btn-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-top: 0.4rem;
+  color: var(--accent, #818cf8);
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn-link:hover { text-decoration: underline; }
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(2, 6, 23, 0.75);
+  animation: fadeIn 0.15s ease;
+}
+
+.modal {
+  width: min(640px, 100%);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--card, #0f172a);
+  border: 1px solid var(--border, #1e293b);
+  border-radius: var(--radius, 14px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.25rem 1.4rem 0.9rem;
+  border-bottom: 1px solid var(--border, #1e293b);
+}
+.modal-header h3 { margin: 0.5rem 0 0; font-size: 1rem; line-height: 1.4; }
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-dim, #94a3b8);
+  font-size: 1.6rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+}
+.modal-close:hover { color: var(--text, #e2e8f0); }
+
+.modal-body {
+  padding: 1.25rem 1.4rem;
+  overflow-y: auto;
+}
+.modal-body .tag-list { margin-top: 1rem; }
+.modal-body .status-note { margin-top: 0.9rem; }
+
+.modal-footer {
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  padding: 0.9rem 1.4rem;
+  border-top: 1px solid var(--border, #1e293b);
+  font-size: 0.85rem;
+  color: var(--text-dim, #94a3b8);
+}
+.modal-footer .btn-ghost { margin-left: auto; }
+
+/* ── Destructive confirmation modal ───────────────────────── */
+
+.modal-danger { border-color: rgba(248, 113, 113, 0.35); }
+.modal-danger .modal-header { border-bottom-color: rgba(248, 113, 113, 0.25); }
+
+.modal-body .field { margin-top: 1.1rem; }
+.modal-body label strong { color: var(--text, #e2e8f0); }
+
+.modal-footer .modal-cancel { margin-left: auto; }
+.modal-footer .modal-confirm { margin-left: 0.6rem; }
+
+.btn:disabled,
+.btn-danger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: #7f1d1d;
+}
+.btn-danger:disabled:hover { background: #7f1d1d; }

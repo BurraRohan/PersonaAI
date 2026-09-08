@@ -391,3 +391,163 @@ class TestCompositeScore:
     def test_missing_dimensions_fall_back(self):
         from services.llm_service import _composite_score
         assert _composite_score({"overall_score": 61}) >= 1
+
+
+class TestContentPromptV2:
+    """v2 exists to stop the generator sounding like a language model."""
+
+    def test_v3_is_active_and_earlier_versions_are_kept(self, temp_db):
+        from main import seed_default_prompts
+        from database.models import PromptTemplate
+
+        seed_default_prompts(temp_db)
+        versions = (
+            temp_db.query(PromptTemplate)
+            .filter(PromptTemplate.agent_name == "content")
+            .order_by(PromptTemplate.version)
+            .all()
+        )
+        assert [v.version for v in versions] == [1, 2, 3, 4, 5]
+        assert [v.is_active for v in versions] == [False, False, False, False, True]
+
+    def test_editing_a_prompt_requires_a_new_version(self, temp_db):
+        """Seeding never overwrites an existing version, so a changed prompt
+        must be seeded as a new one or it will not reach a live database."""
+        from main import seed_default_prompts
+        from database.models import PromptTemplate
+        from services.llm_service import get_active_prompt
+
+        # A database that already holds v1 and v2, as a running instance would.
+        temp_db.add(PromptTemplate(agent_name="content", version=1,
+                                   template="old v1", is_active=False))
+        temp_db.add(PromptTemplate(agent_name="content", version=2,
+                                   template="old v2", is_active=True))
+        temp_db.commit()
+
+        seed_default_prompts(temp_db)
+
+        template, version = get_active_prompt(temp_db, "content")
+        assert version == 5
+        assert "Never write any of the following" in template
+
+    def test_v2_bans_the_common_tells(self, temp_db):
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, version = get_active_prompt(temp_db, "content")
+        assert version == 5
+
+        for tell in ("Em dashes", "delve", "leverage", "Groups of three",
+                     "engagement bait"):
+            assert tell in template
+
+    def test_v2_does_not_force_a_word_count(self, temp_db):
+        """v1's 150-300 word floor was what produced padding."""
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, _ = get_active_prompt(temp_db, "content")
+        assert "150-300 words" not in template
+        assert "Let the length follow the idea" in template
+
+    def test_emoji_are_allowed_but_placed_deliberately(self, temp_db):
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, _ = get_active_prompt(temp_db, "content")
+        assert "Two or three" in template
+        assert "Never a row of them at the" in template
+
+    def test_rhythm_rules_are_concrete(self, temp_db):
+        """v3 produced four sentences of near-identical length. v4 names the fix."""
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, _ = get_active_prompt(temp_db, "content")
+        assert "five words or" in template
+        assert "No two sentences in a row" in template
+        assert "blank line between" in template
+
+    def test_rhythm_appears_before_the_fabrication_guard(self, temp_db):
+        """Ordering matters: in v3 the guard led and flattened the voice."""
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, _ = get_active_prompt(temp_db, "content")
+        assert template.index("RHYTHM") < template.index("WHAT YOU MAY NOT INVENT")
+
+
+class TestContentPromptGuardsAgainstFabrication:
+    """v2 must not licence the model to invent specifics it was never given."""
+
+    def test_v2_forbids_invented_specifics(self, temp_db):
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, version = get_active_prompt(temp_db, "content")
+        assert version == 5
+
+        for rule in ("A timestamp, date, or time of day",
+                     "A log line, stack trace",
+                     "Do not manufacture the",
+                     "does any"):
+            assert rule in template
+
+    def test_v2_asks_for_plain_prose(self, temp_db):
+        """Markdown and code fences do not render in the post view."""
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, _ = get_active_prompt(temp_db, "content")
+        assert "No markdown, no" in template
+
+
+class TestContentPromptV5Energy:
+    """v4 read correctly but flat. v5 permits warmth without promotional register."""
+
+    def test_energy_is_explicitly_allowed(self, temp_db):
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, version = get_active_prompt(temp_db, "content")
+        assert version == 5
+        assert "ENERGY" in template
+        assert "Be warm" in template
+        assert "Direct address" in template
+
+    def test_promotional_register_still_banned(self, temp_db):
+        """Warmth is allowed; conference-brochure phrasing is not."""
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, _ = get_active_prompt(temp_db, "content")
+        assert "is being paved by" in template
+        assert "conference brochure" in template
+
+    def test_claimed_outcomes_count_as_fabrication(self, temp_db):
+        """v4 let 'the change eliminated the collisions' through."""
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, _ = get_active_prompt(temp_db, "content")
+        assert "A result you are claiming" in template
+        assert "not what you achieved" in template
+
+    def test_paragraph_break_is_checked_at_the_end(self, temp_db):
+        """v3 and v4 both returned a single block despite being asked not to."""
+        from main import seed_default_prompts
+        from services.llm_service import get_active_prompt
+
+        seed_default_prompts(temp_db)
+        template, _ = get_active_prompt(temp_db, "content")
+        assert "is the post a single block" in template

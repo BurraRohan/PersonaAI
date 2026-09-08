@@ -1,8 +1,4 @@
 [![tests](https://github.com/BurraRohan/PersonaAI/actions/workflows/tests.yml/badge.svg)](https://github.com/BurraRohan/PersonaAI/actions/workflows/tests.yml)
-![Python](https://img.shields.io/badge/python-3.10+-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
-![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C)
-![License](https://img.shields.io/badge/license-MIT-green)
 
 # PersonaAI – Personal Branding Intelligence Agent
 
@@ -30,8 +26,10 @@ Define Brand → Generate Post → Predict Engagement → Publish → Log Metric
 - **Conditional graph routing** — the orchestrator branches on error state and on data availability
 - **Engagement prediction** — the model rates a draft on brand alignment, hook strength, readability and call-to-action; the overall score is a weighted composite computed in Python, not taken from the model
 - **Human-in-the-loop review** — generated posts start `pending`; a person approves or rejects each one after seeing its score, and nothing enters the engagement pipeline unapproved
+- **Post history with full view** — the dashboard lists every post with its status; "Read more" opens the whole text with line breaks intact
+- **Profile deletion** — removes a profile with its posts and engagement records, leaving no orphaned rows. Audit logs are kept: they record what the system did, not what the profile contained
 - **Feedback loop** — analyses recorded engagement and recommends specific changes, referencing actual post topics and numbers
-- **Prompt versioning** — templates stored in the database, with rollback to any prior version in a single API call
+- **Prompt versioning** — every prompt lives in the database with a version number; rollback to any prior version takes one API call and no redeploy. Five content-voice versions ship, from influencer register to plain technical prose
 - **Audit logging** — every LLM call recorded with a trace ID, model, prompt version, latency and status
 - **API security** — bearer token auth, per-endpoint rate limiting, HTML escaping on all rendered model output
 - **Prometheus metrics** — request counts, latency histograms and error rates at `/metrics`
@@ -91,7 +89,7 @@ The UI asks for your API key once and keeps it in `localStorage`, so it survives
 pytest -q
 ```
 
-61 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output.
+84 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output.
 
 The same suite runs on GitHub Actions on every push to `main` (see
 `.github/workflows/tests.yml`). Because nothing hits the network, CI needs only
@@ -234,32 +232,58 @@ The model rates four dimensions, and the overall score is computed from them:
 | `brand_alignment` | 20%    | How closely themes and tone match the profile     |
 | `readability`     | 20%    | Sentence length, paragraph breaks, jargon density |
 
-Asking the model for the composite directly did not work: it would rate hook
-strength 30 and call-to-action 35, then return an overall score in the 70s.
-Language models judge qualities far better than they combine them, so the
-weighting is arithmetic done in Python — the same reason
-`compute_engagement_stats` calculates averages rather than asking for them.
+The composite is computed in Python rather than requested from the model.
+Language models judge qualities well and combine them poorly, so the weighting
+is arithmetic — the same reason `compute_engagement_stats` calculates averages
+instead of asking for them.
 
 The weights are a judgement call, not a fitted model. They are in one place
 (`SCORE_WEIGHTS` in `services/llm_service.py`) and easy to change.
 
 ---
 
+## Writing Voice
+
+The content prompt ships in five versions, all kept in the database. Voice is a
+product decision rather than a code change: `POST /prompts/content/rollback/1`
+switches the whole system to a different style in one request, and the choice
+persists across restarts.
+
+| Version | Character                                                                     |
+| ------- | ----------------------------------------------------------------------------- |
+| v1      | LinkedIn-influencer register — emoji lists, high energy, promotional phrasing |
+| v2      | Conversational, minimal constraints                                           |
+| v3      | Strictly factual, plain prose                                                 |
+| v4      | Varied sentence rhythm and real paragraph structure                           |
+| v5      | v4 plus warmth and direct address (default)                                   |
+
+v5 is active by default. It defines what a natural voice means rather than
+asking for an "engaging" post and letting the model decide: vary sentence
+length sharply, open with the claim rather than a wind-up, have a position, use
+paragraph breaks, and place emoji beside the thing they refer to.
+
+It also draws a line around what the model may invent. The agent has the topic
+and the brand profile, nothing else, so it may not write timestamps, metrics,
+log lines, code, named tools, colleagues, or claimed outcomes. Vivid writing
+comes from rhythm and a clear opinion, not from fabricated specifics.
+
+The AI-writing pattern list it avoids — em dashes, negative parallelisms,
+forced rule-of-three, promotional vocabulary — is drawn from Wikipedia's
+"Signs of AI writing", maintained by WikiProject AI Cleanup.
+
+---
+
 ## Prompt Versioning in Practice
 
-The predictor prompt is on v2. It defines a five-band scoring rubric so the
-score means something specific, judges each dimension against its own criteria,
-and derives engagement ranges from the profile's actual history rather than
-guessing.
+Every prompt lives in the database with a version number, and exactly one
+version per agent is active at a time. `GET /prompts/{agent_name}` lists the
+versions; `POST /prompts/{agent_name}/rollback/{version}` switches between
+them, with no redeploy and no restart.
 
-Both versions stay in the database. `GET /prompts/predictor` lists them and
-`POST /prompts/predictor/rollback/1` switches back, so a prompt change is
-reversible in one request rather than a redeploy.
-
-Seeding is checked per `(agent, version)`, so a new version added in code
-reaches an existing database on the next start without wiping it. Templates
-already present are never overwritten, and a version you rolled back stays
-rolled back.
+Seeding is checked per `(agent, version)` rather than "is the table empty", so a
+new version added in code reaches an existing database on the next start without
+wiping it. Existing templates are never overwritten, which means a prompt change
+should be added as a new version rather than an edit to an old one.
 
 ---
 
@@ -270,10 +294,12 @@ Every endpoint except `/health` and `/metrics` requires an `Authorization: Beare
 | Method | Endpoint                                   | Description                                                | Rate limit |
 | ------ | ------------------------------------------ | ---------------------------------------------------------- | ---------- |
 | POST   | `/brand`                                   | Create a brand profile (brand agent)                       | 10/min     |
+| DELETE | `/brand/{user_id}`                         | Delete a profile with its posts and engagement records     | 10/min     |
 | POST   | `/generate`                                | Generate a LinkedIn post (content agent)                   | 10/min     |
 | POST   | `/predict`                                 | Score a saved post (by `post_id`) or pasted draft text     | 10/min     |
 | POST   | `/engagement`                              | Log likes, comments and shares for an **approved** post    | 30/min     |
 | GET    | `/posts/pending/{user_id}`                 | Posts awaiting a human decision                            | —          |
+| GET    | `/posts/{post_id}`                         | One post in full, with status and engagement totals        | —          |
 | POST   | `/posts/{post_id}/review`                  | Approve or reject a generated post                         | 30/min     |
 | POST   | `/feedback`                                | Strategy feedback from engagement history (feedback agent) | 10/min     |
 | POST   | `/orchestrate`                             | Run the full graph: brand → content → feedback             | 5/min      |
@@ -315,7 +341,7 @@ PersonaAI/
 │   ├── rate_limiter.py      # Request rate limiting
 │   └── observability.py     # Prometheus metrics + structured logging
 ├── static/                  # Frontend UI (6-tab dashboard)
-├── tests/                   # pytest suite (61 tests, no network required)
+├── tests/                   # pytest suite (84 tests, no network required)
 ├── .github/workflows/       # CI: runs pytest on every push
 ├── streamlit_dashboard.py   # Observability dashboard
 ├── Dockerfile

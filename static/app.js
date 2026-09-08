@@ -38,6 +38,9 @@ function esc(value) {
 }
 
 // Escape first, then render newlines as line breaks.
+// Only for containers WITHOUT `white-space: pre-wrap` — where the CSS already
+// preserves newlines, use esc() instead, or the \n is consumed here and the
+// CSS has nothing left to break on.
 function escMultiline(value) {
   return esc(value).replace(/\n/g, '<br>');
 }
@@ -238,7 +241,8 @@ document.getElementById('dashboard-form').addEventListener('submit', async (e) =
               ${post.status ? `<span class="status-badge status-${esc(post.status)}">${esc(post.status)}</span>` : ''}
             </div>
             <div class="history-topic">${esc(post.topic)}</div>
-            <div class="history-content">${esc(post.content.length > 200 ? post.content.substring(0, 200) + '...' : post.content)}</div>
+            <div class="history-content">${esc(post.content.length > 200 ? post.content.substring(0, 200) + '…' : post.content)}</div>
+            ${post.content.length > 200 ? `<button type="button" class="btn-link read-more" data-post="${esc(post.post_id)}">Read more</button>` : ''}
             ${post.hashtags && post.hashtags.length > 0 ? `
               <div class="history-hashtags">
                 ${post.hashtags.map(h => `<span class="tag">#${esc(h)}</span>`).join('')}
@@ -275,6 +279,8 @@ document.getElementById('dashboard-form').addEventListener('submit', async (e) =
 
     result.innerHTML = html;
     result.classList.remove('hidden');
+    wirePostModal(result);
+    wireDeleteProfile(brandData);
     showToast(`Dashboard loaded for ${brandData.name}`);
   } catch (err) {
     showToast(err.message, 'error');
@@ -282,6 +288,145 @@ document.getElementById('dashboard-form').addEventListener('submit', async (e) =
     setLoading(btn, false);
   }
 });
+
+// ── Post detail modal ─────────────────────────────────────────
+// The history card shows a 200-character preview. This fetches the whole post
+// so the reader can see it as written, with the line breaks intact.
+
+function wirePostModal(container) {
+  container.querySelectorAll('.read-more').forEach(btn => {
+    btn.addEventListener('click', () => openPostModal(btn.dataset.post));
+  });
+}
+
+async function openPostModal(postId) {
+  try {
+    const post = await apiCall(`/posts/${postId}`, null, 'GET');
+
+    const tags = (post.hashtags || [])
+      .map(h => `<span class="tag">#${esc(h)}</span>`).join('');
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal" role="dialog" aria-modal="true">
+        <div class="modal-header">
+          <div>
+            <span class="status-badge status-${esc(post.status)}">${esc(post.status)}</span>
+            <h3>${esc(post.topic)}</h3>
+          </div>
+          <button type="button" class="modal-close" aria-label="Close">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="post-content">${esc(post.content)}</div>
+          ${tags ? `<div class="tag-list">${tags}</div>` : ''}
+          ${post.review_note ? `<div class="status-note">Review note: ${esc(post.review_note)}</div>` : ''}
+        </div>
+        <div class="modal-footer">
+          <span>👍 ${esc(post.likes)}</span>
+          <span>💬 ${esc(post.comments)}</span>
+          <span>🔄 ${esc(post.shares)}</span>
+          <button type="button" class="btn-ghost modal-copy">Copy text</button>
+        </div>
+      </div>`;
+
+    const close = () => overlay.remove();
+    overlay.querySelector('.modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', function onEsc(e) {
+      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onEsc); }
+    });
+
+    overlay.querySelector('.modal-copy').addEventListener('click', () => {
+      navigator.clipboard.writeText(post.content);
+      showToast('Post copied');
+    });
+
+    document.body.appendChild(overlay);
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+// ── Delete profile ────────────────────────────────────────────
+// Destructive and not undoable, so it asks for the profile name rather than a
+// yes/no box — typing it is hard to do by accident.
+
+function wireDeleteProfile(brandData) {
+  const btn = document.getElementById('delete-profile-btn');
+  if (!btn) return;
+  btn.onclick = () => openDeleteModal(brandData);
+}
+
+function openDeleteModal(brandData) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal modal-danger" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <div>
+          <span class="status-badge status-rejected">Permanent</span>
+          <h3>Delete "${esc(brandData.name)}"?</h3>
+        </div>
+        <button type="button" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="status-note">
+          This removes the profile along with every post and engagement record
+          belonging to it. Audit logs are kept. There is no undo.
+        </p>
+        <div class="field full-width">
+          <label for="delete-confirm">Type <strong>${esc(brandData.name)}</strong> to confirm</label>
+          <input type="text" id="delete-confirm" autocomplete="off" placeholder="${esc(brandData.name)}" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn-ghost modal-cancel">Cancel</button>
+        <button type="button" class="btn btn-danger modal-confirm" disabled>Delete profile</button>
+      </div>
+    </div>`;
+
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onEsc);
+  };
+  function onEsc(e) { if (e.key === 'Escape') close(); }
+
+  const input = overlay.querySelector('#delete-confirm');
+  const confirmBtn = overlay.querySelector('.modal-confirm');
+
+  // The button stays disabled until the typed name matches exactly, so the
+  // destructive action cannot be reached by reflex.
+  input.addEventListener('input', () => {
+    confirmBtn.disabled = input.value.trim() !== brandData.name;
+  });
+
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !confirmBtn.disabled) confirmBtn.click();
+  });
+
+  overlay.querySelector('.modal-close').addEventListener('click', close);
+  overlay.querySelector('.modal-cancel').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', onEsc);
+
+  confirmBtn.addEventListener('click', async () => {
+    setLoading(confirmBtn, true);
+    try {
+      const res = await apiCall(`/brand/${brandData.user_id}`, null, 'DELETE');
+      close();
+      showToast(`Deleted ${res.name}: ${res.posts_deleted} post(s) removed`);
+      document.getElementById('dashboard-result').classList.add('hidden');
+      document.getElementById('dash-user-id').value = '';
+    } catch (err) {
+      showToast(err.message, 'error');
+      setLoading(confirmBtn, false);
+    }
+  });
+
+  document.body.appendChild(overlay);
+  input.focus();
+}
 
 // ── Brand Profile ────────────────────────────────────
 document.getElementById('brand-form').addEventListener('submit', async (e) => {
@@ -364,7 +509,7 @@ document.getElementById('generate-form').addEventListener('submit', async (e) =>
         </button>
       </div>
       <div class="post-preview">
-        <div class="post-content">${escMultiline(data.post_content)}</div>
+        <div class="post-content">${esc(data.post_content)}</div>
       </div>
       <div class="result-field">
         <div class="result-label">Suggested Hashtags</div>

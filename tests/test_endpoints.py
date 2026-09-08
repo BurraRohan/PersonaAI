@@ -420,3 +420,139 @@ class TestPredictDualMode:
                           json={"user_id": user_id + 999, "post_id": post_id},
                           headers=AUTH)
         assert res.status_code in (404,)
+
+
+class TestGetSinglePost:
+    """The history card shows a preview; this returns the whole post."""
+
+    def _post(self, status="approved"):
+        from database.db import SessionLocal
+        from database.models import BrandProfile, Post, Engagement
+
+        db = SessionLocal()
+        try:
+            profile = BrandProfile(
+                name="Reader", role="SDE", industry="Tech", goals="G",
+                preferred_tone="T", tone="T", content_themes='["AI"]',
+                positioning_summary="p", do_guidelines='[]', dont_guidelines='[]',
+            )
+            db.add(profile); db.commit(); db.refresh(profile)
+
+            post = Post(user_id=profile.id, topic="Long topic",
+                        content="First line.\nSecond line.\n\nThird paragraph.",
+                        hashtags='["one","two"]', status=status)
+            db.add(post); db.commit(); db.refresh(post)
+
+            db.add(Engagement(post_id=post.id, likes=12, comments=3, shares=2))
+            db.commit()
+            return profile.id, post.id
+        finally:
+            db.close()
+
+    def test_returns_full_content_with_newlines(self, client):
+        _, post_id = self._post()
+        body = client.get(f"/posts/{post_id}", headers=AUTH).json()
+        assert "\n" in body["content"]
+        assert body["content"].count("\n") == 3
+
+    def test_includes_status_and_engagement(self, client):
+        _, post_id = self._post()
+        body = client.get(f"/posts/{post_id}", headers=AUTH).json()
+        assert body["status"] == "approved"
+        assert body["likes"] == 12
+        assert body["hashtags"] == ["one", "two"]
+
+    def test_missing_post_is_404(self, client):
+        assert client.get("/posts/9999", headers=AUTH).status_code == 404
+
+    def test_requires_auth(self, client):
+        _, post_id = self._post()
+        assert client.get(f"/posts/{post_id}").status_code == 401
+
+
+class TestDeleteProfile:
+    """Deleting a profile must not leave orphaned posts or engagement rows."""
+
+    def _profile_with_data(self):
+        from database.db import SessionLocal
+        from database.models import BrandProfile, Post, Engagement
+
+        db = SessionLocal()
+        try:
+            profile = BrandProfile(
+                name="Doomed", role="SDE", industry="Tech", goals="G",
+                preferred_tone="T", tone="T", content_themes='[]',
+                positioning_summary="", do_guidelines='[]', dont_guidelines='[]',
+            )
+            db.add(profile); db.commit(); db.refresh(profile)
+
+            for topic in ("A", "B"):
+                post = Post(user_id=profile.id, topic=topic,
+                            content="text", status="approved")
+                db.add(post); db.commit(); db.refresh(post)
+                db.add(Engagement(post_id=post.id, likes=5, comments=1, shares=0))
+            db.commit()
+            return profile.id
+        finally:
+            db.close()
+
+    def test_delete_removes_profile_and_reports_counts(self, client):
+        user_id = self._profile_with_data()
+        res = client.delete(f"/brand/{user_id}", headers=AUTH)
+        assert res.status_code == 200
+        body = res.json()
+        assert body["deleted"] is True
+        assert body["posts_deleted"] == 2
+        assert body["engagements_deleted"] == 2
+
+    def test_no_orphans_left_behind(self, client):
+        from database.db import SessionLocal
+        from database.models import Post, Engagement
+
+        user_id = self._profile_with_data()
+        client.delete(f"/brand/{user_id}", headers=AUTH)
+
+        db = SessionLocal()
+        try:
+            assert db.query(Post).filter(Post.user_id == user_id).count() == 0
+            assert db.query(Engagement).count() == 0
+        finally:
+            db.close()
+
+    def test_dashboard_404s_after_delete(self, client):
+        user_id = self._profile_with_data()
+        client.delete(f"/brand/{user_id}", headers=AUTH)
+        assert client.get(f"/dashboard/{user_id}", headers=AUTH).status_code == 404
+
+    def test_deleting_twice_is_404(self, client):
+        user_id = self._profile_with_data()
+        client.delete(f"/brand/{user_id}", headers=AUTH)
+        assert client.delete(f"/brand/{user_id}", headers=AUTH).status_code == 404
+
+    def test_audit_logs_survive_deletion(self, client):
+        """Audit logs record what the system did, not what the profile held."""
+        from database.db import SessionLocal
+        from database.models import AuditLog
+
+        db = SessionLocal()
+        try:
+            db.add(AuditLog(trace_id="t-1", agent_name="brand", prompt_version=1,
+                            input_summary="x", output_summary="y",
+                            model="m", latency_ms=10.0, status="success"))
+            db.commit()
+            before = db.query(AuditLog).count()
+        finally:
+            db.close()
+
+        user_id = self._profile_with_data()
+        client.delete(f"/brand/{user_id}", headers=AUTH)
+
+        db = SessionLocal()
+        try:
+            assert db.query(AuditLog).count() == before
+        finally:
+            db.close()
+
+    def test_delete_requires_auth(self, client):
+        user_id = self._profile_with_data()
+        assert client.delete(f"/brand/{user_id}").status_code == 401

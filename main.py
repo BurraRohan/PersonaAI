@@ -100,8 +100,488 @@ Brand Profile:
 Topic: {topic}
 
 Return ONLY the JSON object, no extra text.""",
+            is_active=False,
+            description="v1 — asked for an 'engaging' post, produced influencer-voice output",
+        ),
+        PromptTemplate(
+            agent_name="content",
+            version=2,
+            template="""Write a LinkedIn post the way a real person would: someone
+who actually did the thing and is telling a colleague about it.
+
+Brand Profile:
+  Tone: {tone}
+  Content Themes: {content_themes}
+  Positioning: {positioning}
+  Do: {do_guidelines}
+  Don't: {dont_guidelines}
+
+Topic: {topic}
+
+WHAT YOU MAY AND MAY NOT INVENT
+
+Write only from the topic and the brand profile above. You were not there and
+you do not have the logs, so do not invent specifics you were not given:
+
+- No timestamps, dates or times ("at 14:32 UTC yesterday").
+- No metrics, percentages or counts that were not supplied.
+- No log lines, stack traces, error strings or code blocks.
+- No named tools, versions or systems that are not in the topic or profile.
+- No quoted dialogue, and no colleagues, customers or teams by name.
+
+Concrete does not mean fabricated. Write about the shape of the problem, what
+made it hard, and what the reader should take from it. A post that says "this
+kind of bug only appears when two sessions race" is specific and honest. A post
+that says "at 14:32 UTC our partner app threw a 500" is a fabrication unless
+you were told so.
+
+HOW TO WRITE IT
+
+Open with the substance, not a wind-up. Lead with the actual claim, the
+counterintuitive part, or the mistake — whatever the reader most needs to hear
+first. Never open with a rhetorical question, never with "In today's fast-paced
+world", never with the topic restated as a headline.
+
+Vary your sentence length. Short one. Then a longer one that takes its time and
+earns the space it uses. That unevenness is most of what makes writing sound
+human.
+
+Have a point of view. Say what you think, admit what you got wrong, mention the
+part that still bothers you. A post with no opinion in it reads like a press
+release.
+
+Use "I". First person is not unprofessional, it is honest.
+
+Let the length follow the idea. If the point lands in 90 words, stop at 90.
+Padding to hit a word count is the most obvious tell there is.
+
+DO NOT WRITE LIKE AN LLM
+
+These are the specific patterns that make a post recognisably machine-written.
+Avoid every one of them:
+
+- Em dashes. Use commas, full stops, or brackets instead.
+- "It's not just X, it's Y" and "Not only... but also". Just say the thing.
+- Groups of three. Two examples, or four, or one. Not always three.
+- These words: delve, leverage, robust, seamless, landscape, testament,
+  elevate, unlock, harness, navigate, realm, tapestry, crucial, pivotal,
+  underscore, showcase, foster, intricate, vibrant, game-changer, dive deep.
+- "-ing" clauses tacked on the end to sound thoughtful: "...highlighting the
+  importance of", "...ensuring maximum impact", "...reflecting a broader shift".
+- Vague authority: "experts agree", "studies show", "industry leaders say".
+  Either name the source or drop the claim.
+- Bold text for emphasis, and bullet lists where every item starts with a
+  bolded label and a colon.
+- Grand closing statements about what this means for the future of the industry.
+- Ending with a generic engagement bait question like "What do you think?" or
+  "Would love to hear your thoughts". If you ask something, ask something only
+  someone who read the post could answer.
+
+EMOJI: use them where they fit the brand's tone, the way the person themselves
+would. Two or three across a post is normal on LinkedIn. Each one should carry
+meaning — a specific object, a reaction — rather than sit there as decoration.
+Do not open the post with one, and do not put one at the start of every line.
+
+HASHTAGS: 3-5, lowercase in the JSON, no marketing filler like
+#motivation or #success.
+
+Return ONLY valid JSON with these keys:
+- "post_content": the post text as plain prose, with a blank line between
+  paragraphs. No markdown, no code fences, no bold, no bullet characters.
+- "suggested_hashtags": a list of 3-5 hashtags (without the # symbol)
+
+Before you return it, reread the post and ask: does this sound like a person,
+or does it sound like a language model imitating a person? If it is the second
+one, rewrite it.
+
+Return ONLY the JSON object, no extra text.""",
+            is_active=False,
+            description="v2 — natural voice, bans LLM writing tells",
+        ),
+        PromptTemplate(
+            agent_name="content",
+            version=3,
+            template="""Write a LinkedIn post the way a real person would: someone
+who actually did the thing and is telling a colleague about it.
+
+Brand Profile:
+  Tone: {tone}
+  Content Themes: {content_themes}
+  Positioning: {positioning}
+  Do: {do_guidelines}
+  Don't: {dont_guidelines}
+
+Topic: {topic}
+
+WHAT YOU MAY AND MAY NOT INVENT
+
+This is the most important rule here, and it overrides every other instruction
+below. You were not there. You have no logs, no metrics, no incident, and no
+colleagues. Everything you know is the topic line and the brand profile.
+
+Never write any of the following unless it appears verbatim in the topic:
+
+- A timestamp, date, or time of day. Not "14:32 UTC", not "last Tuesday",
+  not "at 2am".
+- A number describing something that happened: latency figures, error rates,
+  percentages, throughput, revenue, how many users were affected.
+- A log line, stack trace, error message, query, or block of code.
+- A named library, tool, version, or internal service.
+- A person: no colleagues, no "shout out to", no quoted conversation.
+- A specific incident at all. No outage, no alert firing, no pager, no
+  debugging session, no "we shipped a fix".
+
+If the topic is phrased as personal experience ("why I stopped doing X"), write
+the reasoning that leads someone to that position. Do not manufacture the
+experience that produced it.
+
+Write about the pattern, not an event. This is honest and still specific:
+
+  "Time-based IDs look unique until two nodes generate one in the same
+  millisecond. Clock skew makes that a matter of when, not if."
+
+This is fabrication, and it is the single worst thing you can do here:
+
+  "At 02:13 UTC our order service threw a duplicate-key error and throughput
+  rose 12% after we switched to ULID."
+
+Before returning the post, reread it and delete every sentence containing a
+detail you were not given. If that leaves the post shorter, good.
+
+HOW TO WRITE IT
+
+Open with the substance, not a wind-up. Lead with the actual claim, the
+counterintuitive part, or the mistake — whatever the reader most needs to hear
+first. Never open with a rhetorical question, never with "In today's fast-paced
+world", never with the topic restated as a headline.
+
+Vary your sentence length. Short one. Then a longer one that takes its time and
+earns the space it uses. That unevenness is most of what makes writing sound
+human.
+
+Have a point of view. Say what you think, admit what you got wrong, mention the
+part that still bothers you. A post with no opinion in it reads like a press
+release.
+
+Use "I". First person is not unprofessional, it is honest.
+
+Let the length follow the idea. If the point lands in 90 words, stop at 90.
+Padding to hit a word count is the most obvious tell there is.
+
+DO NOT WRITE LIKE AN LLM
+
+These are the specific patterns that make a post recognisably machine-written.
+Avoid every one of them:
+
+- Em dashes. Use commas, full stops, or brackets instead.
+- "It's not just X, it's Y" and "Not only... but also". Just say the thing.
+- Groups of three. Two examples, or four, or one. Not always three.
+- These words: delve, leverage, robust, seamless, landscape, testament,
+  elevate, unlock, harness, navigate, realm, tapestry, crucial, pivotal,
+  underscore, showcase, foster, intricate, vibrant, game-changer, dive deep.
+- "-ing" clauses tacked on the end to sound thoughtful: "...highlighting the
+  importance of", "...ensuring maximum impact", "...reflecting a broader shift".
+- Vague authority: "experts agree", "studies show", "industry leaders say".
+  Either name the source or drop the claim.
+- Bold text for emphasis, and bullet lists where every item starts with a
+  bolded label and a colon.
+- Grand closing statements about what this means for the future of the industry.
+- Ending with a generic engagement bait question like "What do you think?" or
+  "Would love to hear your thoughts". If you ask something, ask something only
+  someone who read the post could answer.
+
+EMOJI: use them where they fit the brand's tone, the way the person themselves
+would. Two or three across a post is normal on LinkedIn. Each one should carry
+meaning — a specific object, a reaction — rather than sit there as decoration.
+Do not open the post with one, and do not put one at the start of every line.
+
+HASHTAGS: 3-5, lowercase in the JSON, no marketing filler like
+#motivation or #success.
+
+Return ONLY valid JSON with these keys:
+- "post_content": the post text as plain prose, with a blank line between
+  paragraphs. No markdown, no code fences, no bold, no bullet characters.
+- "suggested_hashtags": a list of 3-5 hashtags (without the # symbol)
+
+Before you return it, reread the post and ask: does this sound like a person,
+or does it sound like a language model imitating a person? If it is the second
+one, rewrite it.
+
+Return ONLY the JSON object, no extra text.""",
+            is_active=False,
+            description="v3 — anti-fabrication rules, emoji guidance relaxed",
+        ),
+        PromptTemplate(
+            agent_name="content",
+            version=4,
+            template="""Write a LinkedIn post the way a real person would: someone who has thought hard
+about this and is telling a colleague what they concluded.
+
+Brand Profile:
+  Tone: {tone}
+  Content Themes: {content_themes}
+  Positioning: {positioning}
+  Do: {do_guidelines}
+  Don't: {dont_guidelines}
+
+Topic: {topic}
+
+RHYTHM — this is what separates writing that breathes from writing that drones.
+
+Sentence lengths must vary sharply. No two sentences in a row may be close to
+the same length. Somewhere in the post, write a sentence of five words or
+fewer. Somewhere else, let one run long and take its time getting where it is
+going, the way people actually talk when they are working something out.
+
+Like this:
+
+  Timestamps feel unique. They are not. Two services writing in the same
+  millisecond will happily hand you the same key, and the database will reject
+  one of them without ever telling you which write you lost.
+
+Not like this:
+
+  Relying on the wall clock gives the illusion of uniqueness. Clock drift
+  between machines means ordering is not guaranteed. Switching to a generated
+  identifier decouples uniqueness from time.
+
+The second version is not wrong. It is just flat, because every sentence is the
+same length and nothing surprises the reader.
+
+Use paragraph breaks. Two to four short paragraphs, with a blank line between
+them. A single block of text is exhausting to read on a phone.
+
+VOICE
+
+Have a position and commit to it. Say what you think, admit what you got wrong,
+name the part that still annoys you. Hedging everything reads like a committee
+wrote it.
+
+Use "I". Use contractions. Address the reader as "you" when it fits.
+
+Open with the sharpest thing you have — the claim, the mistake, the
+counterintuitive part. Never open with a rhetorical question, never with "In
+today's fast-paced world", never by restating the topic as a headline.
+
+Let the length follow the idea. If the point lands in 90 words, stop at 90.
+Padding to reach a word count is the most obvious tell there is.
+
+WHAT YOU MAY NOT INVENT
+
+You were not there. You have no logs, no metrics, no incident, no colleagues.
+Everything you know is the topic line and the brand profile above.
+
+Never write any of the following unless it appears verbatim in the topic:
+
+- A timestamp, date, or time of day. Not "14:32 UTC", not "last Tuesday".
+- A number describing something that happened: latency figures, error rates,
+  percentages, throughput, revenue, users affected.
+- A log line, stack trace, error message, query, or block of code.
+- A named library, tool, version, or internal service.
+- A person: no colleagues, no "shout out to", no quoted conversation.
+- A specific incident: no outage, no alert firing, no pager, no "we shipped
+  a fix on Friday".
+
+If the topic is phrased as personal experience ("why I stopped doing X"), write
+the reasoning that leads someone to that position. Do not manufacture the
+incident that produced it.
+
+This constraint costs you nothing. Vivid writing comes from rhythm, a clear
+opinion, and precise language — not from invented specifics. "Two services
+writing in the same millisecond will happily hand you the same key" is vivid
+and entirely honest.
+
+DO NOT WRITE LIKE AN LLM
+
+- Em dashes. Use commas, full stops, or brackets.
+- "It's not just X, it's Y" and "Not only... but also".
+- Groups of three. Use two examples, or four, or one.
+- These words: delve, leverage, robust, seamless, landscape, testament,
+  elevate, unlock, harness, navigate, realm, tapestry, crucial, pivotal,
+  underscore, showcase, foster, intricate, vibrant, game-changer, dive deep.
+- "-ing" clauses tacked on to sound thoughtful: "...highlighting the importance
+  of", "...ensuring maximum impact", "...reflecting a broader shift".
+- Vague authority: "experts agree", "studies show", "industry leaders say".
+- Bold text, and bullet lists where every item is a bolded label plus a colon.
+- Grand closing statements about the future of the industry.
+- Generic engagement bait: "What do you think?", "Would love your thoughts".
+  If you ask something, ask what only a reader of this post could answer.
+
+EMOJI
+
+Two or three, placed where a person would actually put one: beside the thing it
+refers to, or after a line that earns a reaction. Never a row of them at the
+end. Never one opening the post. Never one starting every line. If none of them
+would land, use none.
+
+OUTPUT
+
+Return ONLY valid JSON with these keys:
+- "post_content": plain prose, blank line between paragraphs. No markdown, no
+  code fences, no bold, no bullet characters.
+- "suggested_hashtags": 3-5 hashtags without the # symbol, no filler like
+  motivation or success.
+
+Before returning it, read the post back and check two things. First: does any
+sentence contain a detail you were not given? Delete it. Second: are two
+consecutive sentences roughly the same length? Rewrite one of them.
+
+Return ONLY the JSON object, no extra text.""",
+            is_active=False,
+            description="v4 — rhythm and voice rules given equal weight to the fabrication guard",
+        ),
+        PromptTemplate(
+            agent_name="content",
+            version=5,
+            template="""Write a LinkedIn post the way a real person would: someone who has thought hard
+about this and is telling a colleague what they concluded.
+
+Brand Profile:
+  Tone: {tone}
+  Content Themes: {content_themes}
+  Positioning: {positioning}
+  Do: {do_guidelines}
+  Don't: {dont_guidelines}
+
+Topic: {topic}
+
+RHYTHM — this is what separates writing that breathes from writing that drones.
+
+Sentence lengths must vary sharply. No two sentences in a row may be close to
+the same length. Somewhere in the post, write a sentence of five words or
+fewer. Somewhere else, let one run long and take its time getting where it is
+going, the way people actually talk when they are working something out.
+
+Like this:
+
+  Timestamps feel unique. They are not. Two services writing in the same
+  millisecond will happily hand you the same key, and the database will reject
+  one of them without ever telling you which write you lost.
+
+Not like this:
+
+  Relying on the wall clock gives the illusion of uniqueness. Clock drift
+  between machines means ordering is not guaranteed. Switching to a generated
+  identifier decouples uniqueness from time.
+
+The second version is not wrong. It is just flat, because every sentence is the
+same length and nothing surprises the reader.
+
+Use paragraph breaks. Two to four short paragraphs, with a blank line between
+them. A single block of text is exhausting to read on a phone. This is not
+optional — a wall of text is the fastest way to lose the reader.
+
+ENERGY
+
+Be warm. Be a bit blunt. Write like you actually care about this, because a
+post with no pulse gets scrolled past no matter how correct it is.
+
+Things that are welcome:
+
+  Direct address. "If you are still doing this, stop."
+  Mild exasperation. "This one cost me a weekend."
+  Enthusiasm about a fix that genuinely worked.
+  A short aside in brackets, the way people actually think.
+  Humour, if it fits the brand's tone.
+
+What is NOT energy, and reads as machine-written every time:
+
+  "Looking ahead, the road to tomorrow's X is being paved by..."
+  "In an era where...", "As we navigate the evolving landscape of..."
+  Numbered emoji lists: 1️⃣ 2️⃣ 3️⃣
+  Anything that sounds like a conference brochure.
+
+The difference is simple. Warmth comes from having a real reaction to a real
+idea. Promotional register comes from dressing up an ordinary point in
+important-sounding language. Do the first, never the second.
+
+VOICE
+
+Have a position and commit to it. Say what you think, admit what you got wrong,
+name the part that still annoys you. Hedging everything reads like a committee
+wrote it.
+
+Use "I". Use contractions. Address the reader as "you" when it fits.
+
+Open with the sharpest thing you have — the claim, the mistake, the
+counterintuitive part. Never open with a rhetorical question, never with "In
+today's fast-paced world", never by restating the topic as a headline.
+
+Let the length follow the idea. If the point lands in 90 words, stop at 90.
+Padding to reach a word count is the most obvious tell there is.
+
+WHAT YOU MAY NOT INVENT
+
+You were not there. You have no logs, no metrics, no incident, no colleagues.
+Everything you know is the topic line and the brand profile above.
+
+Never write any of the following unless it appears verbatim in the topic:
+
+- A timestamp, date, or time of day. Not "14:32 UTC", not "last Tuesday".
+- A number describing something that happened: latency figures, error rates,
+  percentages, throughput, revenue, users affected.
+- A log line, stack trace, error message, query, or block of code.
+- A named library, tool, version, or internal service.
+- A person: no colleagues, no "shout out to", no quoted conversation.
+- A specific incident: no outage, no alert firing, no pager, no "we shipped
+  a fix on Friday".
+- A result you are claiming: "the change eliminated the collisions", "latency
+  stayed the same", "confidence grew", "we saved a week". You do not know what
+  happened after. Write what you expect and why, not what you achieved.
+
+If the topic is phrased as personal experience ("why I stopped doing X"), write
+the reasoning that leads someone to that position. Do not manufacture the
+incident that produced it.
+
+This constraint costs you nothing. Vivid writing comes from rhythm, a clear
+opinion, and precise language — not from invented specifics. "Two services
+writing in the same millisecond will happily hand you the same key" is vivid
+and entirely honest.
+
+DO NOT WRITE LIKE AN LLM
+
+- Em dashes. Use commas, full stops, or brackets.
+- "It's not just X, it's Y" and "Not only... but also".
+- Groups of three. Use two examples, or four, or one.
+- These words: delve, leverage, robust, seamless, landscape, testament,
+  elevate, unlock, harness, navigate, realm, tapestry, crucial, pivotal,
+  underscore, showcase, foster, intricate, vibrant, game-changer, dive deep.
+- "-ing" clauses tacked on to sound thoughtful: "...highlighting the importance
+  of", "...ensuring maximum impact", "...reflecting a broader shift".
+- Vague authority: "experts agree", "studies show", "industry leaders say".
+- Bold text, and bullet lists where every item is a bolded label plus a colon.
+- Grand closing statements about the future of the industry.
+- Generic engagement bait: "What do you think?", "Would love your thoughts".
+  If you ask something, ask what only a reader of this post could answer.
+
+EMOJI
+
+Two or three, placed where a person would actually put one: beside the thing it
+refers to, or after a line that earns a reaction. Never a row of them at the
+end. Never one opening the post. Never one starting every line. If none of them
+would land, use none.
+
+OUTPUT
+
+Return ONLY valid JSON with these keys:
+- "post_content": plain prose, blank line between paragraphs. No markdown, no
+  code fences, no bold, no bullet characters.
+- "suggested_hashtags": 3-5 hashtags without the # symbol, no filler like
+  motivation or success.
+
+Before returning it, read the post back and check three things.
+
+First: does any sentence contain a detail you were not given, including a
+result you are claiming? Delete it.
+
+Second: are two consecutive sentences roughly the same length? Rewrite one.
+
+Third: is the post a single block? If there is no blank line in it, break it
+into paragraphs now. This is the check most often skipped.
+
+Return ONLY the JSON object, no extra text.""",
             is_active=True,
-            description="Default content generation prompt v1",
+            description="v5 — v4 rhythm plus explicit warmth, promotional register still banned",
         ),
         PromptTemplate(
             agent_name="feedback",
@@ -640,6 +1120,92 @@ def predict(request: Request, body: PredictRequest, db: Session = Depends(get_db
         "improvement_tips": result.get("improvement_tips", ""),
         "post_id": scored_post.id if scored_post else None,
         "status": scored_post.status if scored_post else None,
+    }
+
+
+# ── Profile Management ──────────────────────────────────
+
+@app.delete("/brand/{user_id}", tags=["Brand Strategy"],
+            dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+def delete_brand_profile(user_id: int, request: Request,
+                         db: Session = Depends(get_db)):
+    """Delete a brand profile and everything belonging to it.
+
+    Posts and engagement records are removed with the profile: leaving them
+    behind would orphan rows that the dashboard and feedback queries still
+    join against. Audit logs are deliberately kept — they record what the
+    system did, not what the profile contained, and that history should
+    survive the profile being removed.
+    """
+    from database.models import BrandProfile, Engagement
+
+    profile = db.query(BrandProfile).filter(BrandProfile.id == user_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Brand profile not found.")
+
+    posts = db.query(Post).filter(Post.user_id == user_id).all()
+    post_ids = [p.id for p in posts]
+
+    engagement_count = 0
+    if post_ids:
+        engagement_count = (
+            db.query(Engagement)
+            .filter(Engagement.post_id.in_(post_ids))
+            .delete(synchronize_session=False)
+        )
+        db.query(Post).filter(Post.user_id == user_id).delete(
+            synchronize_session=False
+        )
+
+    name = profile.name
+    db.delete(profile)
+    db.commit()
+
+    logger.info("Deleted profile %d (%s): %d posts, %d engagement records",
+                user_id, name, len(post_ids), engagement_count)
+
+    return {
+        "deleted": True,
+        "user_id": user_id,
+        "name": name,
+        "posts_deleted": len(post_ids),
+        "engagements_deleted": engagement_count,
+    }
+
+
+@app.get("/posts/{post_id}", tags=["Content Generation"],
+         dependencies=[Depends(verify_api_key)])
+def get_post(post_id: int, request: Request, db: Session = Depends(get_db)):
+    """Fetch one post in full, with its engagement totals."""
+    import json as _json
+
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found.")
+
+    try:
+        hashtags = _json.loads(post.hashtags) if post.hashtags else []
+    except _json.JSONDecodeError:
+        hashtags = []
+
+    likes = sum(e.likes for e in post.engagements)
+    comments = sum(e.comments for e in post.engagements)
+    shares = sum(e.shares for e in post.engagements)
+
+    return {
+        "post_id": post.id,
+        "user_id": post.user_id,
+        "topic": post.topic,
+        "content": post.content,
+        "hashtags": hashtags,
+        "status": post.status,
+        "review_note": post.review_note,
+        "reviewed_at": post.reviewed_at,
+        "likes": likes,
+        "comments": comments,
+        "shares": shares,
+        "created_at": post.created_at,
     }
 
 
