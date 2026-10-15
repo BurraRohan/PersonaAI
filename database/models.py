@@ -51,6 +51,12 @@ class Post(Base):
     reviewed_at = Column(DateTime, nullable=True)
     review_note = Column(Text, nullable=True)
 
+    # Set the first time a reviewer edits the post. `content` then holds the
+    # human-edited text and this keeps what the model originally wrote, so
+    # there is always a record of how much the reviewer changed.
+    original_content = Column(Text, nullable=True)
+    edited_at = Column(DateTime, nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     brand_profile = relationship("BrandProfile", back_populates="posts")

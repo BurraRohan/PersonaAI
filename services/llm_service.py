@@ -4,6 +4,7 @@ Includes: retry logic, JSON parsing, audit logging, prompt versioning.
 """
 
 import json
+import re
 import logging
 import os
 import time
@@ -113,9 +114,11 @@ def _call_with_retry(prompt: str, trace_id: str = None) -> str:
                 )
             else:
                 logger.error("[%s] LLM API error: %s", trace_id, e)
+                # The provider's error text can include request details, so it
+                # goes to the log only. The client gets the trace id to quote.
                 raise HTTPException(
                     status_code=502,
-                    detail=f"LLM service error: {e}",
+                    detail=f"The language model service returned an error (trace {trace_id}).",
                 )
 
 
@@ -310,6 +313,44 @@ SCORE_WEIGHTS = {
 }
 
 
+_RANGE_PATTERN = re.compile(r"^\s*(\d{1,7})\s*[-–]\s*(\d{1,7})\s*$")
+
+
+def _clamp_score(value, default: int = 50) -> int:
+    """Coerce a model-supplied score to an int in 1-100."""
+    try:
+        return max(1, min(100, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return default
+
+
+def _clean_range(value) -> str:
+    """Accept only 'low-high' with digits; anything else becomes 'N/A'."""
+    match = _RANGE_PATTERN.match(str(value or ""))
+    if not match:
+        return "N/A"
+    low, high = sorted((int(match.group(1)), int(match.group(2))))
+    return f"{low}-{high}"
+
+
+def _sanitise_prediction(result: dict) -> dict:
+    """Force the model's prediction into the shape the API promises.
+
+    Model output is untrusted: a draft can contain instructions, and the model
+    may follow them. Every field is coerced to its declared type here, so a
+    score is always an int and a range is always digits, whatever was returned.
+    """
+    clean = {key: _clamp_score(result.get(key)) for key in SCORE_WEIGHTS}
+    for key in ("predicted_likes", "predicted_comments", "predicted_shares"):
+        clean[key] = _clean_range(result.get(key))
+    tips = result.get("improvement_tips", "")
+    if isinstance(tips, list):
+        tips = "\n".join(str(t) for t in tips)
+    clean["improvement_tips"] = str(tips)[:2000]
+    clean["overall_score"] = result.get("overall_score")
+    return clean
+
+
 def _composite_score(result: dict) -> int:
     """Derive overall_score from the four dimension scores.
 
@@ -395,6 +436,7 @@ Return ONLY the JSON object, no extra text."""
     # score in the 70s. So the composite is computed here instead, from the
     # dimensions the model did score. Same reasoning as compute_engagement_stats
     # doing its arithmetic in Python rather than asking the model to average.
+    result = _sanitise_prediction(result)
     result["overall_score"] = _composite_score(result)
 
     latency = (time.time() - start) * 1000

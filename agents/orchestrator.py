@@ -101,8 +101,9 @@ def brand_node(state: WorkflowState) -> WorkflowState:
         logger.info("[Orchestrator] brand profile id=%d", profile.id)
 
     except Exception as exc:
-        state["error"] = f"Brand creation failed: {exc}"
-        _step(state, f"Brand creation failed: {exc}")
+        logger.exception("[Orchestrator] brand step failed")
+        state["error"] = "Brand creation failed"
+        _step(state, "Brand creation failed")
     finally:
         db.close()
 
@@ -137,8 +138,9 @@ def content_node(state: WorkflowState) -> WorkflowState:
         logger.info("[Orchestrator] post id=%d", post.id)
 
     except Exception as exc:
-        state["error"] = f"Content generation failed: {exc}"
-        _step(state, f"Content generation failed: {exc}")
+        logger.exception("[Orchestrator] content step failed")
+        state["error"] = "Content generation failed"
+        _step(state, "Content generation failed")
     finally:
         db.close()
 
@@ -175,7 +177,8 @@ def check_history_node(state: WorkflowState) -> WorkflowState:
 
     except Exception as exc:
         state["engagement_history"] = []
-        _step(state, f"Engagement history check failed: {exc}")
+        logger.exception("[Orchestrator] history check failed")
+        _step(state, "Engagement history check failed")
     finally:
         db.close()
 
@@ -201,7 +204,8 @@ def feedback_node(state: WorkflowState) -> WorkflowState:
         # Feedback is a bonus, never a blocker.
         state["feedback_summary"] = None
         state["feedback_available"] = False
-        _step(state, f"Feedback skipped: {exc}")
+        logger.exception("[Orchestrator] feedback step failed")
+        _step(state, "Feedback skipped: generation failed")
     finally:
         db.close()
 

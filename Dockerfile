@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -11,6 +11,12 @@ COPY . .
 
 # Directory for the SQLite file (mounted as a volume in docker-compose)
 RUN mkdir -p /app/data
+
+# Run as an unprivileged user. If the app is ever compromised, the attacker
+# gets this account, not root inside the container.
+RUN useradd --create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
 
 # Expose port
 EXPOSE 8000

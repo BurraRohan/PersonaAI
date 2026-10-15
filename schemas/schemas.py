@@ -3,22 +3,41 @@ Pydantic schemas for request validation and response serialization.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Annotated, Any, Dict, List, Optional
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 # Agent execution metadata attached to responses so the tool-calling trace
 # is visible to callers instead of only living in the server logs.
 AgentTrace = List[Dict[str, Any]]
 
+# ── Input limits ────────────────────────────────────────────────
+# Every request field is bounded. Unbounded text would let one request bloat
+# the database or send a multi-megabyte prompt to a paid LLM API; unbounded
+# integers overflow SQLite and crash the request. Short fields match their
+# database column sizes.
+
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+Role = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+Short = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+Medium = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
+Long = Annotated[str, StringConstraints(max_length=2000)]
+Topic = Annotated[str, StringConstraints(strip_whitespace=True, min_length=10, max_length=300)]
+PostText = Annotated[str, StringConstraints(max_length=10_000)]
+ListItem = Annotated[str, StringConstraints(max_length=300)]
+Hashtag = Annotated[str, StringConstraints(max_length=60)]
+
+ID = Annotated[int, Field(ge=1, le=2_147_483_647)]
+Count = Annotated[int, Field(ge=0, le=100_000_000)]
+
 
 # ── Brand Endpoint ──────────────────────────────────────────────
 
 class BrandRequest(BaseModel):
-    name: str = Field(..., json_schema_extra={"example": "Alice Johnson"})
-    role: str = Field(..., json_schema_extra={"example": "ML Engineer"})
-    industry: str = Field(..., json_schema_extra={"example": "AI/ML"})
-    goals: str = Field(..., json_schema_extra={"example": "Thought leadership and community building"})
-    preferred_tone: str = Field(..., json_schema_extra={"example": "Professional yet approachable"})
+    name: Name = Field(..., json_schema_extra={"example": "Alice Johnson"})
+    role: Role = Field(..., json_schema_extra={"example": "ML Engineer"})
+    industry: Short = Field(..., json_schema_extra={"example": "AI/ML"})
+    goals: Medium = Field(..., json_schema_extra={"example": "Thought leadership and community building"})
+    preferred_tone: Short = Field(..., json_schema_extra={"example": "Professional yet approachable"})
 
 
 class BrandResponse(BaseModel):
@@ -43,8 +62,8 @@ class BrandResponse(BaseModel):
 # ── Content Generation Endpoint ─────────────────────────────────
 
 class GenerateRequest(BaseModel):
-    user_id: int = Field(..., json_schema_extra={"example": 1})
-    topic: str = Field(..., json_schema_extra={"example": "Why fine-tuning matters more than prompt engineering"})
+    user_id: ID = Field(..., json_schema_extra={"example": 1})
+    topic: Topic = Field(..., json_schema_extra={"example": "Why fine-tuning matters more than prompt engineering"})
 
 
 class GenerateResponse(BaseModel):
@@ -60,10 +79,10 @@ class GenerateResponse(BaseModel):
 # ── Engagement Tracking Endpoint ────────────────────────────────
 
 class EngagementRequest(BaseModel):
-    post_id: int = Field(..., json_schema_extra={"example": 1})
-    likes: int = Field(0, ge=0, json_schema_extra={"example": 42})
-    comments: int = Field(0, ge=0, json_schema_extra={"example": 7})
-    shares: int = Field(0, ge=0, json_schema_extra={"example": 3})
+    post_id: ID = Field(..., json_schema_extra={"example": 1})
+    likes: Count = Field(0, json_schema_extra={"example": 42})
+    comments: Count = Field(0, json_schema_extra={"example": 7})
+    shares: Count = Field(0, json_schema_extra={"example": 3})
 
 
 class EngagementResponse(BaseModel):
@@ -80,7 +99,7 @@ class EngagementResponse(BaseModel):
 # ── Feedback Endpoint ───────────────────────────────────────────
 
 class FeedbackRequest(BaseModel):
-    user_id: int = Field(..., json_schema_extra={"example": 1})
+    user_id: ID = Field(..., json_schema_extra={"example": 1})
 
 
 class FeedbackResponse(BaseModel):
@@ -95,12 +114,12 @@ class FeedbackResponse(BaseModel):
 # ── Orchestration Endpoint (LangGraph) ──────────────────────────
 
 class OrchestrateRequest(BaseModel):
-    name: str = Field(..., json_schema_extra={"example": "Alice Johnson"})
-    role: str = Field(..., json_schema_extra={"example": "ML Engineer"})
-    industry: str = Field(..., json_schema_extra={"example": "AI/ML"})
-    goals: str = Field(..., json_schema_extra={"example": "Thought leadership"})
-    preferred_tone: str = Field(..., json_schema_extra={"example": "Professional yet approachable"})
-    topic: str = Field(..., json_schema_extra={"example": "Why fine-tuning matters more than prompt engineering"})
+    name: Name = Field(..., json_schema_extra={"example": "Alice Johnson"})
+    role: Role = Field(..., json_schema_extra={"example": "ML Engineer"})
+    industry: Short = Field(..., json_schema_extra={"example": "AI/ML"})
+    goals: Medium = Field(..., json_schema_extra={"example": "Thought leadership"})
+    preferred_tone: Short = Field(..., json_schema_extra={"example": "Professional yet approachable"})
+    topic: Topic = Field(..., json_schema_extra={"example": "Why fine-tuning matters more than prompt engineering"})
 
 
 class OrchestrateResponse(BaseModel):
@@ -128,11 +147,11 @@ class PromptTemplateResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class PredictRequest(BaseModel):
-    user_id: int = Field(..., json_schema_extra={"example": 1})
+    user_id: ID = Field(..., json_schema_extra={"example": 1})
     # Either score a saved post by id (which then becomes approvable), or paste
     # free text for a scratch draft that is not in the database.
-    post_id: Optional[int] = Field(None, json_schema_extra={"example": 1})
-    draft_content: Optional[str] = Field(
+    post_id: Optional[ID] = Field(None, json_schema_extra={"example": 1})
+    draft_content: Optional[PostText] = Field(
         None,
         json_schema_extra={"example": "Here's why every engineer should learn about LLMs..."},
     )
@@ -157,8 +176,8 @@ class PredictResponse(BaseModel):
 class ReviewRequest(BaseModel):
     """Approve or reject a generated post."""
 
-    decision: str = Field(..., json_schema_extra={"example": "approve"})
-    note: Optional[str] = Field(
+    decision: Annotated[str, StringConstraints(max_length=20)] = Field(..., json_schema_extra={"example": "approve"})
+    note: Optional[Long] = Field(
         None, json_schema_extra={"example": "Too generic, off-brand"}
     )
 
@@ -178,3 +197,26 @@ class PendingPost(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+
+class PostEditRequest(BaseModel):
+    """Reviewer edits to a pending post. Send either field, or both."""
+
+    content: Optional[PostText] = Field(None, json_schema_extra={"example": "Edited post text."})
+    hashtags: Optional[List[Hashtag]] = Field(None, max_length=15, json_schema_extra={"example": ["cloud", "finops"]})
+
+
+class BrandEditRequest(BaseModel):
+    """Partial update of a brand profile. Omitted fields are left unchanged."""
+
+    name: Optional[Annotated[str, StringConstraints(max_length=100)]] = None
+    role: Optional[Annotated[str, StringConstraints(max_length=200)]] = None
+    industry: Optional[Annotated[str, StringConstraints(max_length=100)]] = None
+    goals: Optional[Annotated[str, StringConstraints(max_length=1000)]] = None
+    preferred_tone: Optional[Annotated[str, StringConstraints(max_length=100)]] = None
+    tone: Optional[Long] = None
+    content_themes: Optional[List[ListItem]] = Field(None, max_length=20)
+    positioning_summary: Optional[Long] = None
+    do_guidelines: Optional[List[ListItem]] = Field(None, max_length=20)
+    dont_guidelines: Optional[List[ListItem]] = Field(None, max_length=20)

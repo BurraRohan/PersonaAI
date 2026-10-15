@@ -18,6 +18,13 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from database.db import engine, get_db, Base
+from typing import Annotated, Optional
+from fastapi import Path, Query
+
+# Path and query parameters are bounded so an out-of-range id is a 422, not an
+# integer overflow inside SQLite that surfaces as a 500.
+PathID = Annotated[int, Path(ge=1, le=2_147_483_647)]
+AgentName = Annotated[str, Path(min_length=1, max_length=50, pattern=r"^[a-z_]+$")]
 from database.models import Post, Engagement, PromptTemplate
 from schemas.schemas import (
     BrandRequest, BrandResponse,
@@ -35,7 +42,7 @@ from utils.auth import verify_api_key
 from utils.rate_limiter import limiter
 from utils.observability import setup_logging, setup_prometheus
 
-from schemas.schemas import PredictRequest, PredictResponse, ReviewRequest
+from schemas.schemas import PredictRequest, PredictResponse, ReviewRequest, PostEditRequest, BrandEditRequest
 from services.llm_service import predict_engagement
 from database.models import BrandProfile
 
@@ -755,6 +762,12 @@ async def lifespan(app: FastAPI):
     logger.info("Creating database tables …")
     Base.metadata.create_all(bind=engine)
 
+    # Bring an older database up to date without wiping it.
+    from database.db import ensure_schema
+    added_columns = ensure_schema()
+    if added_columns:
+        logger.info("Added missing columns: %s", ", ".join(added_columns))
+
     # Seed default prompts
     from database.db import SessionLocal
     db = SessionLocal()
@@ -800,7 +813,12 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
-# Fix 4: Prometheus metrics
+# Security headers on every response, and a cap on request body size.
+from utils.security import SecurityHeadersMiddleware, BodySizeLimitMiddleware
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(BodySizeLimitMiddleware)
+
+# Prometheus metrics (behind the API key unless METRICS_PUBLIC=1)
 setup_prometheus(app)
 
 # Static files
@@ -913,7 +931,7 @@ def orchestrate(request: Request, body: OrchestrateRequest):
 
 @app.get("/prompts/{agent_name}", response_model=list[PromptTemplateResponse],
          tags=["Prompt Versioning"], dependencies=[Depends(verify_api_key)])
-def list_prompts(agent_name: str, request: Request, db: Session = Depends(get_db)):
+def list_prompts(agent_name: AgentName, request: Request, db: Session = Depends(get_db)):
     """List all prompt versions for a given agent."""
     templates = (
         db.query(PromptTemplate)
@@ -926,7 +944,7 @@ def list_prompts(agent_name: str, request: Request, db: Session = Depends(get_db
 
 @app.post("/prompts/{agent_name}/rollback/{version}", response_model=PromptTemplateResponse,
           tags=["Prompt Versioning"], dependencies=[Depends(verify_api_key)])
-def rollback_prompt(agent_name: str, version: int, request: Request, db: Session = Depends(get_db)):
+def rollback_prompt(agent_name: AgentName, version: PathID, request: Request, db: Session = Depends(get_db)):
     """Roll back to a specific prompt version by deactivating others."""
     target = (
         db.query(PromptTemplate)
@@ -955,8 +973,8 @@ def rollback_prompt(agent_name: str, version: int, request: Request, db: Session
 @app.get("/audit-logs", tags=["Observability"], dependencies=[Depends(verify_api_key)])
 def get_audit_logs(
     request: Request,
-    agent_name: str = None,
-    limit: int = 50,
+    agent_name: Annotated[Optional[str], Query(max_length=50, pattern=r"^[a-z_]+$")] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
     db: Session = Depends(get_db),
 ):
     """Retrieve recent audit logs with optional agent name filter."""
@@ -986,7 +1004,7 @@ def get_audit_logs(
 
 @app.get("/history/{user_id}", tags=["Post History"],
          dependencies=[Depends(verify_api_key)])
-def get_post_history(user_id: int, request: Request, db: Session = Depends(get_db)):
+def get_post_history(user_id: PathID, request: Request, db: Session = Depends(get_db)):
     """Get all posts and engagement data for a brand profile."""
     import json as _json
     from database.models import BrandProfile
@@ -1053,7 +1071,7 @@ def get_post_history(user_id: int, request: Request, db: Session = Depends(get_d
 
 # ── Engagement Predictor ────────────────────────────────────────────────
 
-@app.post("/predict", tags=["Predictor"],
+@app.post("/predict", tags=["Predictor"], response_model=PredictResponse,
           dependencies=[Depends(verify_api_key)])
 @limiter.limit("10/minute")
 def predict(request: Request, body: PredictRequest, db: Session = Depends(get_db)):
@@ -1128,7 +1146,7 @@ def predict(request: Request, body: PredictRequest, db: Session = Depends(get_db
 @app.delete("/brand/{user_id}", tags=["Brand Strategy"],
             dependencies=[Depends(verify_api_key)])
 @limiter.limit("10/minute")
-def delete_brand_profile(user_id: int, request: Request,
+def delete_brand_profile(user_id: PathID, request: Request,
                          db: Session = Depends(get_db)):
     """Delete a brand profile and everything belonging to it.
 
@@ -1176,7 +1194,7 @@ def delete_brand_profile(user_id: int, request: Request,
 
 @app.get("/posts/{post_id}", tags=["Content Generation"],
          dependencies=[Depends(verify_api_key)])
-def get_post(post_id: int, request: Request, db: Session = Depends(get_db)):
+def get_post(post_id: PathID, request: Request, db: Session = Depends(get_db)):
     """Fetch one post in full, with its engagement totals."""
     import json as _json
 
@@ -1202,6 +1220,8 @@ def get_post(post_id: int, request: Request, db: Session = Depends(get_db)):
         "status": post.status,
         "review_note": post.review_note,
         "reviewed_at": post.reviewed_at,
+        "original_content": post.original_content,
+        "edited_at": post.edited_at,
         "likes": likes,
         "comments": comments,
         "shares": shares,
@@ -1209,11 +1229,123 @@ def get_post(post_id: int, request: Request, db: Session = Depends(get_db)):
     }
 
 
+@app.patch("/posts/{post_id}", tags=["Review"],
+           dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+def edit_post(post_id: PathID, body: PostEditRequest, request: Request,
+              db: Session = Depends(get_db)):
+    """Edit a post's text or hashtags before it is reviewed.
+
+    Only pending posts can be edited. An approved post may already have
+    engagement logged against it, and changing its text afterwards would make
+    those numbers describe a post that no longer exists.
+
+    The first edit keeps the model's original text in `original_content`, so
+    the record shows what the AI wrote and what the reviewer changed.
+    """
+    import json as _json
+    from datetime import datetime, timezone
+
+    post = db.query(Post).filter(Post.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found.")
+
+    if post.status != "pending":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Post {post.id} is {post.status}. Only pending posts can be edited.",
+        )
+
+    if body.content is None and body.hashtags is None:
+        raise HTTPException(status_code=422, detail="Nothing to change.")
+
+    if body.content is not None:
+        new_content = body.content.strip()
+        if not new_content:
+            raise HTTPException(status_code=422, detail="Post content cannot be empty.")
+        if new_content != post.content:
+            if post.original_content is None:
+                post.original_content = post.content
+            post.content = new_content
+            post.edited_at = datetime.now(timezone.utc)
+
+    if body.hashtags is not None:
+        cleaned = [h.strip().lstrip("#") for h in body.hashtags if h.strip()]
+        post.hashtags = _json.dumps(cleaned)
+        post.edited_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(post)
+    logger.info("Post %d edited by reviewer", post.id)
+
+    return {
+        "post_id": post.id,
+        "content": post.content,
+        "hashtags": _json.loads(post.hashtags) if post.hashtags else [],
+        "status": post.status,
+        "edited": post.original_content is not None,
+        "edited_at": post.edited_at,
+    }
+
+
+@app.patch("/brand/{user_id}", tags=["Brand Strategy"],
+           dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+def edit_brand_profile(user_id: PathID, body: BrandEditRequest, request: Request,
+                       db: Session = Depends(get_db)):
+    """Update any field of a brand profile. Only fields that are sent change.
+
+    Posts already generated keep their text; the new tone and themes apply to
+    posts generated from here on.
+    """
+    import json as _json
+    from database.models import BrandProfile
+
+    profile = db.query(BrandProfile).filter(BrandProfile.id == user_id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Brand profile not found.")
+
+    updates = body.model_dump(exclude_unset=True)
+    if not updates:
+        raise HTTPException(status_code=422, detail="Nothing to change.")
+
+    list_fields = {"content_themes", "do_guidelines", "dont_guidelines"}
+    for field, value in updates.items():
+        if value is None:
+            continue
+        if field in list_fields:
+            setattr(profile, field, _json.dumps([v.strip() for v in value if v.strip()]))
+        else:
+            value = value.strip()
+            if field == "name" and not value:
+                raise HTTPException(status_code=422, detail="Name cannot be empty.")
+            setattr(profile, field, value)
+
+    db.commit()
+    db.refresh(profile)
+    logger.info("Profile %d updated: %s", profile.id, ", ".join(sorted(updates)))
+
+    return {
+        "id": profile.id,
+        "name": profile.name,
+        "role": profile.role,
+        "industry": profile.industry,
+        "goals": profile.goals,
+        "preferred_tone": profile.preferred_tone,
+        "tone": profile.tone,
+        "content_themes": _json.loads(profile.content_themes) if profile.content_themes else [],
+        "positioning_summary": profile.positioning_summary,
+        "do_guidelines": _json.loads(profile.do_guidelines) if profile.do_guidelines else [],
+        "dont_guidelines": _json.loads(profile.dont_guidelines) if profile.dont_guidelines else [],
+        "updated_fields": sorted(updates),
+    }
+
+
 # ── Human-in-the-Loop Review ────────────────────────────
 
 @app.get("/posts/pending/{user_id}", tags=["Review"],
          dependencies=[Depends(verify_api_key)])
-def list_pending_posts(user_id: int, request: Request, db: Session = Depends(get_db)):
+def list_pending_posts(user_id: PathID, request: Request, db: Session = Depends(get_db)):
     """List posts for a profile that are still awaiting a human decision."""
     from database.models import BrandProfile
 
@@ -1242,7 +1374,7 @@ def list_pending_posts(user_id: int, request: Request, db: Session = Depends(get
 @app.post("/posts/{post_id}/review", tags=["Review"],
           dependencies=[Depends(verify_api_key)])
 @limiter.limit("30/minute")
-def review_post(post_id: int, body: ReviewRequest, request: Request,
+def review_post(post_id: PathID, body: ReviewRequest, request: Request,
                 db: Session = Depends(get_db)):
     """Approve or reject a generated post.
 
@@ -1282,7 +1414,7 @@ def review_post(post_id: int, body: ReviewRequest, request: Request,
 
 @app.get("/dashboard/{user_id}", tags=["Dashboard"],
          dependencies=[Depends(verify_api_key)])
-def get_dashboard(user_id: int, request: Request, db: Session = Depends(get_db)):
+def get_dashboard(user_id: PathID, request: Request, db: Session = Depends(get_db)):
     """Get complete dashboard data for a brand profile — brand info, stats, and post history."""
     import json as _json
     from database.models import BrandProfile
@@ -1362,6 +1494,8 @@ def get_dashboard(user_id: int, request: Request, db: Session = Depends(get_db))
         "tone": profile.tone,
         "positioning_summary": profile.positioning_summary,
         "content_themes": content_themes,
+        "do_guidelines": _json.loads(profile.do_guidelines) if profile.do_guidelines else [],
+        "dont_guidelines": _json.loads(profile.dont_guidelines) if profile.dont_guidelines else [],
         "total_posts": len(posts),
         "pending_posts": pending_count,
         "approved_posts": approved_count,

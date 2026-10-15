@@ -1,8 +1,43 @@
+# ── Secrets: never bake these into an image ──
+.env
+.env.*
+*.pem
+*.key
+.streamlit/secrets.toml
+
+# ── Local data ──
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+
+# ── Python / environments ──
 __pycache__/
-*.pyc
+*.py[cod]
 venv/
 .venv/
+env/
+
+# ── Not needed at runtime ──
 .git/
-.env
-*.db
+.github/
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.log
+assets/
+*.md
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# ── Editors & OS ──
+.vscode/
+.idea/
+.antigravity/
 .DS_Store
+Thumbs.db

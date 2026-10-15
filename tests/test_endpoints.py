@@ -556,3 +556,175 @@ class TestDeleteProfile:
     def test_delete_requires_auth(self, client):
         user_id = self._profile_with_data()
         assert client.delete(f"/brand/{user_id}").status_code == 401
+
+
+def _seed_profile_and_post(status="pending", content="AI draft with github.com/fake/repo"):
+    from database.db import SessionLocal
+    from database.models import BrandProfile, Post
+
+    db = SessionLocal()
+    try:
+        profile = BrandProfile(
+            name="Editor", role="Cloud Engineer", industry="SaaS", goals="G",
+            preferred_tone="Friendly", tone="Practical", content_themes='["FinOps"]',
+            positioning_summary="p", do_guidelines='["Be specific"]',
+            dont_guidelines='["Hype"]',
+        )
+        db.add(profile); db.commit(); db.refresh(profile)
+        post = Post(user_id=profile.id, topic="AWS bill", content=content,
+                    hashtags='["aws"]', status=status)
+        db.add(post); db.commit(); db.refresh(post)
+        return profile.id, post.id
+    finally:
+        db.close()
+
+
+class TestEditPost:
+    """A reviewer fixes a pending post before approving it."""
+
+    def test_edit_updates_content_and_keeps_original(self, client):
+        _, post_id = _seed_profile_and_post()
+        res = client.patch(f"/posts/{post_id}",
+                           json={"content": "Fixed version, no fake link."}, headers=AUTH)
+        assert res.status_code == 200
+        assert res.json()["edited"] is True
+
+        full = client.get(f"/posts/{post_id}", headers=AUTH).json()
+        assert full["content"] == "Fixed version, no fake link."
+        assert full["original_content"] == "AI draft with github.com/fake/repo"
+        assert full["edited_at"] is not None
+
+    def test_second_edit_preserves_the_first_original(self, client):
+        """original_content is what the AI wrote, not the previous human draft."""
+        _, post_id = _seed_profile_and_post()
+        client.patch(f"/posts/{post_id}", json={"content": "First pass."}, headers=AUTH)
+        client.patch(f"/posts/{post_id}", json={"content": "Second pass."}, headers=AUTH)
+        full = client.get(f"/posts/{post_id}", headers=AUTH).json()
+        assert full["content"] == "Second pass."
+        assert full["original_content"] == "AI draft with github.com/fake/repo"
+
+    def test_unedited_post_has_no_original(self, client):
+        _, post_id = _seed_profile_and_post()
+        assert client.get(f"/posts/{post_id}", headers=AUTH).json()["original_content"] is None
+
+    def test_hashtags_are_cleaned(self, client):
+        _, post_id = _seed_profile_and_post()
+        res = client.patch(f"/posts/{post_id}",
+                           json={"hashtags": ["#cloud", " finops ", ""]}, headers=AUTH)
+        assert res.json()["hashtags"] == ["cloud", "finops"]
+
+    def test_approved_post_cannot_be_edited(self, client):
+        """Engagement may already describe the published text."""
+        _, post_id = _seed_profile_and_post(status="approved")
+        res = client.patch(f"/posts/{post_id}", json={"content": "late change"}, headers=AUTH)
+        assert res.status_code == 409
+
+    def test_rejected_post_cannot_be_edited(self, client):
+        _, post_id = _seed_profile_and_post(status="rejected")
+        assert client.patch(f"/posts/{post_id}", json={"content": "x"},
+                            headers=AUTH).status_code == 409
+
+    def test_empty_content_is_rejected(self, client):
+        _, post_id = _seed_profile_and_post()
+        assert client.patch(f"/posts/{post_id}", json={"content": "   "},
+                            headers=AUTH).status_code == 422
+
+    def test_empty_body_is_rejected(self, client):
+        _, post_id = _seed_profile_and_post()
+        assert client.patch(f"/posts/{post_id}", json={}, headers=AUTH).status_code == 422
+
+    def test_edit_then_approve_flow(self, client):
+        _, post_id = _seed_profile_and_post()
+        client.patch(f"/posts/{post_id}", json={"content": "Clean text."}, headers=AUTH)
+        res = client.post(f"/posts/{post_id}/review", json={"decision": "approve"}, headers=AUTH)
+        assert res.json()["status"] == "approved"
+        assert client.get(f"/posts/{post_id}", headers=AUTH).json()["content"] == "Clean text."
+
+    def test_missing_post_is_404(self, client):
+        assert client.patch("/posts/9999", json={"content": "x"}, headers=AUTH).status_code == 404
+
+    def test_requires_auth(self, client):
+        _, post_id = _seed_profile_and_post()
+        assert client.patch(f"/posts/{post_id}", json={"content": "x"}).status_code == 401
+
+
+class TestEditProfile:
+    """Partial update: only the fields sent change."""
+
+    def test_partial_update_leaves_other_fields_alone(self, client):
+        user_id, _ = _seed_profile_and_post()
+        res = client.patch(f"/brand/{user_id}", json={"role": "Senior Cloud Engineer"},
+                           headers=AUTH)
+        assert res.status_code == 200
+        body = res.json()
+        assert body["role"] == "Senior Cloud Engineer"
+        assert body["name"] == "Editor"
+        assert body["industry"] == "SaaS"
+        assert body["updated_fields"] == ["role"]
+
+    def test_list_fields_are_stored_as_lists(self, client):
+        user_id, _ = _seed_profile_and_post()
+        res = client.patch(f"/brand/{user_id}",
+                           json={"content_themes": ["FinOps", " Rightsizing ", ""],
+                                 "dont_guidelines": ["No hype"]}, headers=AUTH).json()
+        assert res["content_themes"] == ["FinOps", "Rightsizing"]
+        assert res["dont_guidelines"] == ["No hype"]
+
+    def test_changes_show_on_dashboard(self, client):
+        user_id, _ = _seed_profile_and_post()
+        client.patch(f"/brand/{user_id}", json={"name": "Renamed"}, headers=AUTH)
+        dash = client.get(f"/dashboard/{user_id}", headers=AUTH).json()
+        assert dash["name"] == "Renamed"
+        assert dash["do_guidelines"] == ["Be specific"]
+
+    def test_existing_posts_are_untouched(self, client):
+        user_id, post_id = _seed_profile_and_post()
+        client.patch(f"/brand/{user_id}", json={"tone": "Completely different"}, headers=AUTH)
+        assert client.get(f"/posts/{post_id}", headers=AUTH).json()["content"] == \
+            "AI draft with github.com/fake/repo"
+
+    def test_blank_name_is_rejected(self, client):
+        user_id, _ = _seed_profile_and_post()
+        assert client.patch(f"/brand/{user_id}", json={"name": "  "},
+                            headers=AUTH).status_code == 422
+
+    def test_empty_body_is_rejected(self, client):
+        user_id, _ = _seed_profile_and_post()
+        assert client.patch(f"/brand/{user_id}", json={}, headers=AUTH).status_code == 422
+
+    def test_missing_profile_is_404(self, client):
+        assert client.patch("/brand/9999", json={"role": "x"}, headers=AUTH).status_code == 404
+
+    def test_requires_auth(self, client):
+        user_id, _ = _seed_profile_and_post()
+        assert client.patch(f"/brand/{user_id}", json={"role": "x"}).status_code == 401
+
+
+class TestSchemaMigration:
+    """An existing database must gain new columns without being wiped."""
+
+    def test_missing_columns_are_added(self, tmp_path, monkeypatch):
+        import sqlite3, sys
+        db_file = tmp_path / "legacy.db"
+        conn = sqlite3.connect(db_file)
+        conn.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER, "
+                     "topic TEXT, content TEXT, hashtags TEXT, created_at DATETIME)")
+        conn.execute("INSERT INTO posts VALUES (1, 1, 't', 'old post', NULL, NULL)")
+        conn.commit(); conn.close()
+
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_file}")
+        for m in [m for m in sys.modules if m.split(".")[0] == "database"]:
+            del sys.modules[m]
+        from database.db import ensure_schema
+
+        added = ensure_schema()
+        assert "posts.status" in added
+        assert "posts.original_content" in added
+
+        conn = sqlite3.connect(db_file)
+        row = conn.execute("SELECT content, status FROM posts WHERE id = 1").fetchone()
+        conn.close()
+        # Pre-existing posts stay visible rather than dropping into a review queue.
+        assert row == ("old post", "approved")
+
+        assert ensure_schema() == []

@@ -1,9 +1,46 @@
+# ── Secrets ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.template
+*.pem
+*.key
+
+# ── Local data ───────────────────────────────────────────────
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+data/
+
+# ── Python ───────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# ── Virtual environments ─────────────────────────────────────
 venv/
 .venv/
-__pycache__/
-*.pyc
+env/
+
+# ── Testing & tooling ────────────────────────────────────────
 .pytest_cache/
-.env
-*.db
-data/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ── Logs ─────────────────────────────────────────────────────
+*.log
+
+# ── Editors & OS ─────────────────────────────────────────────
+.vscode/
+.idea/
+.antigravity/
+*.swp
 .DS_Store
+Thumbs.db
+
+# ── Streamlit ────────────────────────────────────────────────
+.streamlit/secrets.toml

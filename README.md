@@ -19,7 +19,7 @@ PersonaAI structures the guesswork out of personal branding. It builds a brand p
 Feedback quality improves as engagement history accumulates — the model is given more real data to reason over. Nothing is trained or fine-tuned.
 
 ```
-Define Brand → Generate Post → Predict Engagement → Publish → Log Metrics → Get Feedback → Improve
+Define Brand → Generate Post → Evaluate → Edit & Approve → Publish → Log Metrics → Get Feedback → Improve
 ```
 
 ---
@@ -30,13 +30,14 @@ Define Brand → Generate Post → Predict Engagement → Publish → Log Metric
 - **Conditional graph routing** — the orchestrator branches on error state and on data availability
 - **Engagement prediction** — the model rates a draft on brand alignment, hook strength, readability and call-to-action; the overall score is a weighted composite computed in Python, not taken from the model
 - **Human-in-the-loop review** — generated posts start `pending`; a person approves or rejects each one after seeing its score, and nothing enters the engagement pipeline unapproved
-- **Post history with full view** — the dashboard lists every post with its status; "Read more" opens the whole text with line breaks intact
-- **Profile deletion** — removes a profile with its posts and engagement records, leaving no orphaned rows. Audit logs are kept: they record what the system did, not what the profile contained
+- **Edit before approving** — a reviewer can fix a pending post's text and hashtags, then re-score it; the AI's original text is kept on record
+- **Post history with full view** — the dashboard lists every post with its status; "Read more" opens the whole text with line breaks intact, and shows the AI original for edited posts
+- **Profile management** — create, edit and delete profiles. Edits apply to posts generated afterwards; deletion removes posts and engagement records with no orphaned rows, while audit logs are kept
 - **Feedback loop** — analyses recorded engagement and recommends specific changes, referencing actual post topics and numbers
 - **Prompt versioning** — every prompt lives in the database with a version number; rollback to any prior version takes one API call and no redeploy. Five content-voice versions ship, from influencer register to plain technical prose
 - **Audit logging** — every LLM call recorded with a trace ID, model, prompt version, latency and status
-- **API security** — bearer token auth, per-endpoint rate limiting, HTML escaping on all rendered model output
-- **Prometheus metrics** — request counts, latency histograms and error rates at `/metrics`
+- **Security hardening** — bearer token auth, rate limiting, bounded inputs, sanitised model output, a strict Content-Security-Policy, and agent tools scoped so prompt text cannot redirect them to another profile
+- **Prometheus metrics** — request counts, latency histograms and error rates at `/metrics` (API key required)
 - **Streamlit dashboard** — engagement trends and audit log inspection
 - **Docker packaging** — `docker-compose` with a named volume and health checks
 - **Continuous integration** — GitHub Actions runs the full test suite on every push
@@ -67,7 +68,7 @@ pip install -r requirements.txt
 copy .env.template .env    # Windows
 ```
 
-Open `.env` and set both keys. `API_KEY` is required — the app refuses to start without it rather than falling back to a default value. Generate one with:
+Open `.env` and fill in the three required values: `GROQ_API_KEY`, `API_KEY` and `GROQ_MODEL`. The app refuses to start if any is missing rather than falling back to a default. Generate an API key with:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -79,11 +80,14 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 uvicorn main:app --reload
 ```
 
-|                    |                               |
-| ------------------ | ----------------------------- |
-| App UI             | http://127.0.0.1:8000         |
-| Swagger docs       | http://127.0.0.1:8000/docs    |
-| Prometheus metrics | http://127.0.0.1:8000/metrics |
+|                    |                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------- |
+| App UI             | http://127.0.0.1:8000                                                             |
+| Swagger docs       | http://127.0.0.1:8000/docs                                                        |
+| Prometheus metrics | http://127.0.0.1:8000/metrics (API key required — use Swagger's Authorize button) |
+
+Schema changes and new prompt versions are applied on startup, so an existing
+database never needs to be reset.
 
 The UI asks for your API key once and keeps it in `localStorage`, so it survives tab closes and browser restarts. It is never written into the source. To be asked again, type `resetApiKey()` in the browser console.
 
@@ -93,7 +97,7 @@ The UI asks for your API key once and keeps it in `localStorage`, so it survives
 pytest -q
 ```
 
-84 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output.
+141 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output. `tests/test_security.py` covers each protection listed under [Security](#security).
 
 The same suite runs on GitHub Actions on every push to `main` (see
 `.github/workflows/tests.yml`). Because nothing hits the network, CI needs only
@@ -184,7 +188,13 @@ a person reviews it.
 
 The review happens in the **Evaluate** tab, where the score and the decision sit
 together: you see the predicted engagement, the brand-alignment breakdown and the
-improvement tips, then approve or reject on the same screen.
+improvement tips, then approve, reject, or edit on the same screen.
+
+**Edit before deciding** opens the post for correction — an invented figure, a
+claim you would not make, a hashtag you would not use. Saving re-runs the
+evaluation on the edited text, so the decision is made on what will actually be
+published. The model's original text is kept in `original_content` and shown
+under "Read more", so the record shows what the AI wrote and what changed.
 
 | State      | Meaning                                                             |
 | ---------- | ------------------------------------------------------------------- |
@@ -192,12 +202,15 @@ improvement tips, then approve or reject on the same screen.
 | `approved` | A person accepted it. Counts toward feedback and dashboard stats.   |
 | `rejected` | A person declined it. Kept in the database, excluded from analysis. |
 
-Three things follow from the status:
+Four things follow from the status:
 
 - `POST /engagement` returns **409** for a post that is not approved — engagement
   only makes sense for something that was actually published.
 - The Feedback agent analyses approved posts only, so unreviewed drafts and
   rejected ones do not shape strategy advice.
+- Only `pending` posts can be edited. An approved post may already have
+  engagement logged against it, and changing its text would make those numbers
+  describe a post that no longer exists.
 - Rejected posts are **not deleted**. The row stays, with the reviewer's note,
   so there is a record of what the system produced and what a human chose not to
   use — the same reasoning behind the audit log.
@@ -293,29 +306,47 @@ should be added as a new version rather than an edit to an old one.
 
 ## API Endpoints
 
-Every endpoint except `/health` and `/metrics` requires an `Authorization: Bearer <your-api-key>` header.
+Every endpoint except `/health` requires an `Authorization: Bearer <your-api-key>` header.
 
 | Method | Endpoint                                   | Description                                                | Rate limit |
 | ------ | ------------------------------------------ | ---------------------------------------------------------- | ---------- |
 | POST   | `/brand`                                   | Create a brand profile (brand agent)                       | 10/min     |
+| PATCH  | `/brand/{user_id}`                         | Update any profile field; only fields sent are changed     | 10/min     |
 | DELETE | `/brand/{user_id}`                         | Delete a profile with its posts and engagement records     | 10/min     |
 | POST   | `/generate`                                | Generate a LinkedIn post (content agent)                   | 10/min     |
 | POST   | `/predict`                                 | Score a saved post (by `post_id`) or pasted draft text     | 10/min     |
-| POST   | `/engagement`                              | Log likes, comments and shares for an **approved** post    | 30/min     |
 | GET    | `/posts/pending/{user_id}`                 | Posts awaiting a human decision                            | —          |
-| GET    | `/posts/{post_id}`                         | One post in full, with status and engagement totals        | —          |
+| GET    | `/posts/{post_id}`                         | One post in full, with status, edit history and engagement | —          |
+| PATCH  | `/posts/{post_id}`                         | Edit a pending post's text or hashtags                     | 30/min     |
 | POST   | `/posts/{post_id}/review`                  | Approve or reject a generated post                         | 30/min     |
+| POST   | `/engagement`                              | Log likes, comments and shares for an **approved** post    | 30/min     |
 | POST   | `/feedback`                                | Strategy feedback from engagement history (feedback agent) | 10/min     |
 | POST   | `/orchestrate`                             | Run the full graph: brand → content → feedback             | 5/min      |
 | GET    | `/dashboard/{user_id}`                     | Brand info, totals, averages, best topic, post list        | —          |
 | GET    | `/history/{user_id}`                       | All posts and engagement for a profile                     | —          |
 | GET    | `/prompts/{agent_name}`                    | List prompt versions for an agent                          | —          |
 | POST   | `/prompts/{agent_name}/rollback/{version}` | Activate a specific prompt version                         | —          |
-| GET    | `/audit-logs`                              | Recent LLM calls, filterable by `agent_name`               | —          |
+| GET    | `/audit-logs`                              | Recent LLM calls, filterable by `agent_name` (max 500)     | —          |
 | GET    | `/metrics`                                 | Prometheus metrics                                         | —          |
-| GET    | `/health`                                  | Health check                                               | —          |
+| GET    | `/health`                                  | Health check (public)                                      | —          |
 
 Valid `agent_name` values: `brand`, `content`, `feedback`, `predictor`.
+
+---
+
+## Security
+
+| Area             | Protection                                                                                                                                         |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication   | Bearer token on every data route, compared in constant time. No default key: the app will not start without one.                                   |
+| Model output     | Scores are coerced to integers and ranges to digits before leaving the server, and the UI escapes everything it renders.                           |
+| Prompt injection | Agent tools are built per request with the profile id and topic fixed in code, so text in a prompt cannot redirect them to another profile's data. |
+| Input            | Every field has a length limit, numbers are bounded, IDs are range-checked, and request bodies are capped at 64 KB.                                |
+| Browser          | Strict Content-Security-Policy (scripts from this origin only, no inline code), plus `nosniff`, `DENY` framing and `no-referrer`.                  |
+| Errors           | Provider and internal error text goes to the server log; clients get a generic message with a trace id.                                            |
+| Observability    | `/metrics` requires the API key unless `METRICS_PUBLIC=1`.                                                                                         |
+| Container        | Runs as an unprivileged user, not root.                                                                                                            |
+| Dependencies     | Pinned to patched versions and checked with `pip-audit`.                                                                                           |
 
 ---
 
@@ -332,21 +363,21 @@ PersonaAI/
 │   ├── feedback_agent.py    # ReAct agent: engagement analysis
 │   └── orchestrator.py      # LangGraph StateGraph with conditional edges
 ├── services/
-│   └── llm_service.py       # Groq wrapper: retries, JSON parsing, audit logging
+│   └── llm_service.py       # Groq wrapper: retries, JSON parsing, output sanitising
 ├── database/
 │   ├── models.py            # SQLAlchemy ORM models
-│   └── db.py                # Engine, session, dependency
+│   └── db.py                # Engine, session, additive schema migration
 ├── schemas/
-│   └── schemas.py           # Pydantic request/response models
+│   └── schemas.py           # Pydantic request/response models with input limits
 ├── utils/
 │   ├── agent_runtime.py     # Agent execution + tool-call trace capture
 │   ├── config.py            # AGENT_MODE and GROQ_MODEL, read from .env
 │   ├── auth.py              # API key authentication
+│   ├── security.py          # Security headers and request size limit
 │   ├── rate_limiter.py      # Request rate limiting
 │   └── observability.py     # Prometheus metrics + structured logging
 ├── static/                  # Frontend UI (6-tab dashboard)
-├── tests/                   # pytest suite (84 tests, no network required)
-├── .github/workflows/       # CI: runs pytest on every push
+├── tests/                   # pytest suite (141 tests, no network required)
 ├── streamlit_dashboard.py   # Observability dashboard
 ├── Dockerfile
 ├── docker-compose.yml
@@ -360,13 +391,20 @@ PersonaAI/
 
 | Variable            | Description                                                           | Required | Default                                       |
 | ------------------- | --------------------------------------------------------------------- | -------- | --------------------------------------------- |
-| `GROQ_API_KEY`      | Groq API key — [console.groq.com/keys](https://console.groq.com/keys) | Yes      | —                                             |
+| `GROQ_API_KEY`      | Groq API key — [console.groq.com/keys](https://console.groq.com/keys) | Yes      | — (app will not start)                        |
 | `API_KEY`           | Bearer token protecting the API                                       | Yes      | — (app will not start)                        |
-| `DATABASE_URL`      | SQLAlchemy connection string                                          | No       | `sqlite:///./personaai.db`                    |
-| `AGENT_MODE`        | `1` runs the ReAct agents, `0` uses one direct LLM call               | No       | `1`                                           |
 | `GROQ_MODEL`        | Groq model used by all agents and LLM calls                           | Yes      | — (app will not start)                        |
-| `ALLOWED_ORIGINS`   | Comma-separated CORS origins                                          | No       | `http://localhost:8000,http://127.0.0.1:8000` |
+| `AGENT_MODE`        | `1` runs the ReAct agents, `0` uses one direct LLM call               | No       | `1`                                           |
+| `DATABASE_URL`      | SQLAlchemy connection string                                          | No       | `sqlite:///./personaai.db`                    |
 | `PERSONAAI_DB_PATH` | SQLite path used by the Streamlit dashboard                           | No       | `personaai.db`                                |
+| `ALLOWED_ORIGINS`   | Comma-separated CORS origins                                          | No       | `http://localhost:8000,http://127.0.0.1:8000` |
+| `METRICS_PUBLIC`    | `1` makes `/metrics` public; only for private networks                | No       | `0`                                           |
+
+The model name lives only in `.env` — never in the source — so a provider
+deprecation is a one-line config change. It is deliberately not auto-selected:
+tool-calling reliability differs between models, and the audit log records the
+model per call, so past runs stay reproducible. Check
+[Groq's deprecation page](https://console.groq.com/docs/deprecations) for current models.
 
 ---
 
@@ -376,11 +414,9 @@ PersonaAI/
 
 **Agents** — LangChain tools, LangGraph (`create_react_agent` + `StateGraph`), Groq
 
-The model name lives only in `.env` — it is never written into the source, and the app refuses to start without it. A provider deprecation is therefore a one-line config change. It is deliberately not auto-selected: tool-calling reliability differs between models, and the audit log records the model per call, so past runs stay reproducible. Check [Groq's deprecation page](https://console.groq.com/docs/deprecations) for current models.
-
 **Observability** — Prometheus, Streamlit, database-backed audit logs
 
-**Security** — Bearer token auth, SlowAPI rate limiting, output escaping
+**Security** — Bearer token auth, SlowAPI rate limiting, Content-Security-Policy, input bounds, output sanitising, pip-audit
 
 **Packaging & CI** — Docker, docker-compose, Gunicorn with Uvicorn workers, GitHub Actions
 
@@ -394,6 +430,8 @@ Stated plainly, because they shape how the results should be read:
 - **No publishing integration.** Approved posts are stored, not published; you copy them to LinkedIn yourself. There is no LinkedIn API connection, which is also why approval is a manual step rather than a publish trigger.
 - **Engagement figures are entered by hand.** Nothing verifies that the numbers logged via `/engagement` match reality.
 - **Single-tenant auth.** One shared API key protects the whole instance. There are no user accounts, and any holder of the key can read every profile.
+- **The API key lives in the browser.** The UI keeps it in `localStorage` for convenience. Output escaping and the Content-Security-Policy guard it against script injection, but anyone with access to the browser profile can read it.
+- **No HTTPS out of the box.** Serve it behind a TLS-terminating proxy before exposing it beyond your own machine.
 - **SQLite concurrency.** Fine for a single instance; a multi-worker deployment under write load should move to PostgreSQL.
 - **Agent reliability varies.** The model occasionally skips a tool call in a three-step chain. The fallback path covers this, but `execution_mode` is worth checking when a run looks unusual.
 - **Not deployed.** The project is containerized and runs locally or via `docker-compose`, but there is no hosted instance.

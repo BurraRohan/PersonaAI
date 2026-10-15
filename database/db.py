@@ -35,3 +35,39 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+# Columns added after the first release. create_all() only creates missing
+# tables, never missing columns, so an existing database would otherwise break
+# on the next query. Each entry is (table, column, SQL type).
+_ADDED_COLUMNS = [
+    ("posts", "status", "VARCHAR(20) NOT NULL DEFAULT 'approved'"),
+    ("posts", "reviewed_at", "DATETIME"),
+    ("posts", "review_note", "TEXT"),
+    ("posts", "original_content", "TEXT"),
+    ("posts", "edited_at", "DATETIME"),
+]
+
+
+def ensure_schema() -> list[str]:
+    """Add any columns an older database is missing. Returns what was added.
+
+    Posts that predate the review gate get status 'approved', so existing data
+    stays visible and analysable rather than vanishing into a pending queue.
+    """
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    added = []
+
+    with engine.begin() as conn:
+        for table, column, sql_type in _ADDED_COLUMNS:
+            if table not in tables:
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            if column not in existing:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}"))
+                added.append(f"{table}.{column}")
+
+    return added

@@ -97,7 +97,7 @@ async function apiCall(url, body, method = 'POST') {
       'Authorization': `Bearer ${getAuthToken()}`
     },
   };
-  if (body && method === 'POST') {
+  if (body && method !== 'GET' && method !== 'DELETE') {
     options.body = JSON.stringify(body);
   }
   const res = await fetch(API + url, options);
@@ -107,9 +107,56 @@ async function apiCall(url, body, method = 'POST') {
     throw new Error('Invalid or missing API key. Try again.');
   }
 
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.detail || `Error ${res.status}`);
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    // Non-JSON body, e.g. a proxy error page. Fall through to the status text.
+  }
+
+  if (!res.ok) throw new Error(describeError(res.status, data));
   return data;
+}
+
+// Turn an API error into a sentence a person can act on. Validation errors
+// arrive as a list of {loc, msg}; everything else as a string.
+const FIELD_LABELS = {
+  name: 'Name', role: 'Role', industry: 'Industry', goals: 'Goals',
+  preferred_tone: 'Preferred tone', topic: 'Topic', draft_content: 'Draft post',
+  content: 'Post text', hashtags: 'Hashtags', likes: 'Likes', comments: 'Comments',
+  shares: 'Shares', note: 'Note', user_id: 'Profile ID', post_id: 'Post ID',
+  tone: 'Brand voice', positioning_summary: 'Positioning',
+  content_themes: 'Content themes', do_guidelines: 'Do', dont_guidelines: "Don't",
+};
+
+function describeError(status, data) {
+  const detail = data && data.detail;
+
+  if (Array.isArray(detail) && detail.length) {
+    return detail.slice(0, 3).map(d => {
+      const field = (d.loc || []).filter(x => typeof x === 'string' && x !== 'body').pop();
+      const label = FIELD_LABELS[field] || field || 'Input';
+      return `${label}: ${humanise(d)}`;
+    }).join(' · ');
+  }
+  if (typeof detail === 'string') return detail;
+  if (status === 413) return 'That request is too large.';
+  if (status === 429) return 'Too many requests. Wait a minute and try again.';
+  return `Something went wrong (error ${status}).`;
+}
+
+function humanise(d) {
+  const ctx = d.ctx || {};
+  switch (d.type) {
+    case 'string_too_long': return `too long (max ${ctx.max_length} characters)`;
+    case 'string_too_short': return ctx.min_length > 1 ? `too short (min ${ctx.min_length} characters)` : 'required';
+    case 'too_long': return `too many items (max ${ctx.max_length})`;
+    case 'less_than_equal': return `must be at most ${Number(ctx.le).toLocaleString()}`;
+    case 'greater_than_equal': return `must be at least ${ctx.ge}`;
+    case 'int_parsing': case 'int_type': return 'must be a whole number';
+    case 'missing': return 'required';
+    default: return d.msg || 'invalid';
+  }
 }
 
 function renderField(label, value) {
@@ -281,6 +328,7 @@ document.getElementById('dashboard-form').addEventListener('submit', async (e) =
     result.classList.remove('hidden');
     wirePostModal(result);
     wireDeleteProfile(brandData);
+    wireEditProfile(brandData);
     showToast(`Dashboard loaded for ${brandData.name}`);
   } catch (err) {
     showToast(err.message, 'error');
@@ -321,6 +369,11 @@ async function openPostModal(postId) {
           <div class="post-content">${esc(post.content)}</div>
           ${tags ? `<div class="tag-list">${tags}</div>` : ''}
           ${post.review_note ? `<div class="status-note">Review note: ${esc(post.review_note)}</div>` : ''}
+          ${post.original_content ? `
+            <details class="original-text">
+              <summary>Edited by reviewer — show what the AI originally wrote</summary>
+              <div class="post-content">${esc(post.original_content)}</div>
+            </details>` : ''}
         </div>
         <div class="modal-footer">
           <span>👍 ${esc(post.likes)}</span>
@@ -426,6 +479,172 @@ function openDeleteModal(brandData) {
 
   document.body.appendChild(overlay);
   input.focus();
+}
+
+// ── Shared modal shell ────────────────────────────────────────
+
+function openModal({ title, badge, badgeClass, body, confirmLabel, confirmClass, onConfirm, onOpen }) {
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal modal-wide" role="dialog" aria-modal="true">
+      <div class="modal-header">
+        <div>
+          ${badge ? `<span class="status-badge ${badgeClass || ''}">${esc(badge)}</span>` : ''}
+          <h3>${esc(title)}</h3>
+        </div>
+        <button type="button" class="modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">${body}</div>
+      <div class="modal-footer">
+        <button type="button" class="btn-ghost modal-cancel">Cancel</button>
+        <button type="button" class="btn ${confirmClass || ''} modal-confirm">${esc(confirmLabel)}</button>
+      </div>
+    </div>`;
+
+  function onEsc(e) { if (e.key === 'Escape') close(); }
+  const close = () => { overlay.remove(); document.removeEventListener('keydown', onEsc); };
+
+  overlay.querySelector('.modal-close').addEventListener('click', close);
+  overlay.querySelector('.modal-cancel').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', onEsc);
+
+  const confirmBtn = overlay.querySelector('.modal-confirm');
+  confirmBtn.addEventListener('click', async () => {
+    setLoading(confirmBtn, true);
+    try {
+      const ok = await onConfirm(overlay);
+      if (ok !== false) close();
+    } catch (err) {
+      showToast(err.message, 'error');
+    } finally {
+      setLoading(confirmBtn, false);
+    }
+  });
+
+  document.body.appendChild(overlay);
+  if (onOpen) onOpen(overlay);
+  return overlay;
+}
+
+const toLines = arr => (arr || []).join('\n');
+const fromLines = text => text.split('\n').map(t => t.trim()).filter(Boolean);
+
+// ── Edit a post before approving ──────────────────────────────
+// A reviewer who spots an invented figure or a fake link should be able to fix
+// it and approve, not only accept or reject. The server keeps the model's
+// original text, so the change is on record.
+
+async function openEditPostModal(postId) {
+  let post;
+  try {
+    post = await apiCall(`/posts/${postId}`, null, 'GET');
+  } catch (err) {
+    showToast(err.message, 'error');
+    return;
+  }
+
+  openModal({
+    title: post.topic,
+    badge: 'Editing',
+    badgeClass: 'status-pending',
+    confirmLabel: 'Save & re-score',
+    body: `
+      <p class="status-note">Fix anything you would not publish as-is. The AI's original
+      text is kept on record. Saving re-runs the evaluation on your edited version.</p>
+      <div class="field full-width">
+        <label for="edit-post-content">Post text</label>
+        <textarea id="edit-post-content" rows="14">${esc(post.content)}</textarea>
+      </div>
+      <div class="field full-width">
+        <label for="edit-post-tags">Hashtags <span class="label-note">(comma separated, no #)</span></label>
+        <input type="text" id="edit-post-tags" value="${esc((post.hashtags || []).join(', '))}" />
+      </div>`,
+    onOpen: overlay => overlay.querySelector('#edit-post-content').focus(),
+    onConfirm: async overlay => {
+      const content = overlay.querySelector('#edit-post-content').value;
+      const hashtags = overlay.querySelector('#edit-post-tags').value
+        .split(',').map(t => t.trim()).filter(Boolean);
+
+      if (!content.trim()) {
+        showToast('Post text cannot be empty.', 'error');
+        return false;
+      }
+
+      await apiCall(`/posts/${postId}`, { content, hashtags }, 'PATCH');
+      showToast('Post updated — re-scoring');
+
+      // Re-score the edited version so the decision is made on what will ship.
+      document.getElementById('pred-post-id').value = postId;
+      document.getElementById('pred-draft').value = '';
+      document.getElementById('predictor-form').requestSubmit();
+    },
+  });
+}
+
+// ── Edit profile ──────────────────────────────────────────────
+
+function wireEditProfile(brandData) {
+  const btn = document.getElementById('edit-profile-btn');
+  if (!btn) return;
+  btn.onclick = () => openEditProfileModal(brandData);
+}
+
+function openEditProfileModal(p) {
+  const field = (id, label, value, opts = {}) => opts.multiline
+    ? `<div class="field ${opts.full ? 'full-width' : ''}">
+         <label for="${id}">${esc(label)}${opts.note ? ` <span class="label-note">${esc(opts.note)}</span>` : ''}</label>
+         <textarea id="${id}" rows="${opts.rows || 3}">${esc(value || '')}</textarea>
+       </div>`
+    : `<div class="field ${opts.full ? 'full-width' : ''}">
+         <label for="${id}">${esc(label)}</label>
+         <input type="text" id="${id}" value="${esc(value || '')}" />
+       </div>`;
+
+  openModal({
+    title: `Edit ${p.name}`,
+    badge: `Profile #${p.user_id}`,
+    confirmLabel: 'Save changes',
+    body: `
+      <p class="status-note">Changes apply to posts generated from now on. Existing posts keep their text.</p>
+      <div class="form-grid">
+        ${field('ep-name', 'Full name', p.name)}
+        ${field('ep-role', 'Role', p.role)}
+        ${field('ep-industry', 'Industry', p.industry)}
+        ${field('ep-pref-tone', 'Preferred tone', p.preferred_tone)}
+        ${field('ep-goals', 'Goals', p.goals, { multiline: true, full: true, rows: 2 })}
+        ${field('ep-tone', 'Brand voice', p.tone, { multiline: true, full: true, rows: 2 })}
+        ${field('ep-positioning', 'Positioning', p.positioning_summary, { multiline: true, full: true, rows: 3 })}
+        ${field('ep-themes', 'Content themes', toLines(p.content_themes), { multiline: true, full: true, rows: 4, note: '(one per line)' })}
+        ${field('ep-do', 'Do', toLines(p.do_guidelines), { multiline: true, rows: 4, note: '(one per line)' })}
+        ${field('ep-dont', "Don't", toLines(p.dont_guidelines), { multiline: true, rows: 4, note: '(one per line)' })}
+      </div>`,
+    onOpen: overlay => overlay.querySelector('#ep-name').focus(),
+    onConfirm: async overlay => {
+      const v = id => overlay.querySelector(id).value;
+      if (!v('#ep-name').trim()) {
+        showToast('Name cannot be empty.', 'error');
+        return false;
+      }
+
+      const res = await apiCall(`/brand/${p.user_id}`, {
+        name: v('#ep-name'),
+        role: v('#ep-role'),
+        industry: v('#ep-industry'),
+        preferred_tone: v('#ep-pref-tone'),
+        goals: v('#ep-goals'),
+        tone: v('#ep-tone'),
+        positioning_summary: v('#ep-positioning'),
+        content_themes: fromLines(v('#ep-themes')),
+        do_guidelines: fromLines(v('#ep-do')),
+        dont_guidelines: fromLines(v('#ep-dont')),
+      }, 'PATCH');
+
+      showToast(`Saved ${res.name}`);
+      document.getElementById('dashboard-form').requestSubmit();
+    },
+  });
 }
 
 // ── Brand Profile ────────────────────────────────────
@@ -550,7 +769,7 @@ document.getElementById('predictor-form').addEventListener('submit', async (e) =
 
     const data = await apiCall('/predict', payload);
 
-    const score = data.overall_score;
+    const score = Math.max(0, Math.min(100, Math.round(Number(data.overall_score)) || 0));
     const scoreColor = score >= 70 ? 'score-high' : score >= 40 ? 'score-mid' : 'score-low';
 
     result.innerHTML = `
@@ -593,6 +812,7 @@ document.getElementById('predictor-form').addEventListener('submit', async (e) =
 
       ${renderDecisionPanel(data)}
     `;
+    applyBarWidths(result);
     result.classList.remove('hidden');
     wireDecisionButtons(data.post_id);
     showToast(`Score: ${score}/100`);
@@ -648,6 +868,7 @@ function renderDecisionPanel(data) {
       <div class="decision-actions">
         <button type="button" class="btn btn-approve" id="btn-approve">Approve</button>
         <button type="button" class="btn btn-reject" id="btn-reject">Reject</button>
+        <button type="button" class="btn-ghost decision-edit" id="btn-edit-post">Edit before deciding</button>
       </div>
     </div>`;
 }
@@ -658,6 +879,9 @@ function wireDecisionButtons(postId) {
   const approve = document.getElementById('btn-approve');
   const reject = document.getElementById('btn-reject');
   if (!approve || !reject) return;
+
+  const editBtn = document.getElementById('btn-edit-post');
+  if (editBtn) editBtn.addEventListener('click', () => openEditPostModal(postId));
 
   const decide = async (decision, btn) => {
     setLoading(btn, true);
@@ -744,18 +968,29 @@ document.getElementById('pending-refresh').addEventListener('click', loadPending
 document.getElementById('pred-user-id').addEventListener('change', loadPending);
 
 function renderRatingBar(label, value) {
-  const color = value >= 70 ? '#34d399' : value >= 40 ? '#fbbf24' : '#f87171';
+  // Model output is untrusted. Coerce to a bounded number before it touches
+  // markup; the width is applied through the DOM, not an inline style
+  // attribute, so the Content-Security-Policy can forbid inline styles.
+  const n = Math.max(0, Math.min(100, Math.round(Number(value)) || 0));
+  const color = n >= 70 ? '#34d399' : n >= 40 ? '#fbbf24' : '#f87171';
   return `
     <div class="rating-item">
       <div class="rating-header">
-        <span class="rating-name">${label}</span>
-        <span class="rating-value">${value}%</span>
+        <span class="rating-name">${esc(label)}</span>
+        <span class="rating-value">${n}%</span>
       </div>
       <div class="rating-bar-bg">
-        <div class="rating-bar-fill" style="width: ${value}%; background: ${color};"></div>
+        <div class="rating-bar-fill" data-width="${n}" data-color="${color}"></div>
       </div>
     </div>
   `;
+}
+
+function applyBarWidths(root) {
+  root.querySelectorAll('.rating-bar-fill[data-width]').forEach(el => {
+    el.style.width = `${el.dataset.width}%`;
+    el.style.background = el.dataset.color;
+  });
 }
 
 // ── Engagement ───────────────────────────────────────

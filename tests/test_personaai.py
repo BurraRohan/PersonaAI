@@ -119,7 +119,7 @@ class TestEngagementStats:
         ]
         monkeypatch.setattr(fa, "_load_history", lambda user_id: history)
 
-        stats = json.loads(fa.compute_engagement_stats.invoke({"user_id": 1}))
+        stats = fa.engagement_stats(1)
 
         assert stats["entries"] == 2
         assert stats["avg_likes"] == 55.0
@@ -129,7 +129,7 @@ class TestEngagementStats:
     def test_empty_history_returns_error_not_zero(self, monkeypatch):
         import agents.feedback_agent as fa
         monkeypatch.setattr(fa, "_load_history", lambda user_id: [])
-        stats = json.loads(fa.compute_engagement_stats.invoke({"user_id": 99}))
+        stats = fa.engagement_stats(99)
         assert "error" in stats
 
 

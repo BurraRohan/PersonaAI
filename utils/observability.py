@@ -34,4 +34,22 @@ def setup_prometheus(app):
         excluded_handlers=["/metrics", "/health", "/docs", "/openapi.json"],
     )
     instrumentator.instrument(app)
-    instrumentator.expose(app, endpoint="/metrics", include_in_schema=True, tags=["Observability"])
+
+    # /metrics lists every route with its traffic and latency, which maps the
+    # API for anyone who can reach it. It requires the API key by default;
+    # Prometheus can send one with `authorization: credentials`. Set
+    # METRICS_PUBLIC=1 only when the endpoint sits on a private network.
+    import os
+    from fastapi import Depends
+    from utils.auth import verify_api_key
+
+    public = os.getenv("METRICS_PUBLIC", "0").strip().lower() in {"1", "true", "yes"}
+    dependencies = [] if public else [Depends(verify_api_key)]
+
+    instrumentator.expose(
+        app,
+        endpoint="/metrics",
+        include_in_schema=True,
+        tags=["Observability"],
+        dependencies=dependencies,
+    )

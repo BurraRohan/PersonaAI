@@ -222,7 +222,7 @@ def create_brand_profile(db: Session, request: BrandRequest) -> BrandResponse:
         logger.warning("Brand agent did not persist a profile; using direct path.")
     except Exception as exc:
         logger.warning("Brand agent failed (%s); using direct path.", exc)
-        trace.append({"step": len(trace) + 1, "action": "agent_error", "error": str(exc)[:300]})
+        trace.append({"step": len(trace) + 1, "action": "agent_error", "error": type(exc).__name__})
 
     profile = _create_profile_directly(db, request)
     return _to_response(profile, trace, "fallback_direct")
