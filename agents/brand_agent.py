@@ -209,7 +209,7 @@ def create_brand_profile(db: Session, request: BrandRequest) -> BrandResponse:
 
     trace: list = []
     try:
-        messages = run_agent(get_brand_agent(), instruction)
+        messages = run_agent(get_brand_agent(), instruction, "brand")
         trace = extract_trace(messages)
         profile_id = find_tool_result(messages, "save_brand_profile", "id")
 

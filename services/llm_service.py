@@ -1,6 +1,7 @@
 """
-LLM Service – wraps Groq API (Llama 3.3 70B) for all AI-powered generation.
-Includes: retry logic, JSON parsing, audit logging, prompt versioning.
+LLM Service – wraps the Groq API for all AI-powered generation.
+Includes: retry logic, JSON parsing, prompt versioning, and an audit log row
+for every call with its token usage and cost.
 """
 
 import json
@@ -9,6 +10,8 @@ import logging
 import os
 import time
 import uuid
+from contextvars import ContextVar
+from typing import Optional
 
 from dotenv import load_dotenv
 # pyrefly: ignore [missing-import]
@@ -29,6 +32,12 @@ client = OpenAI(
 )
 
 from utils.config import GROQ_MODEL as MODEL
+from utils.costs import Usage, usage_from_openai
+from utils.request_context import endpoint_var, request_id_var
+
+# Usage reported by the most recent provider response in this context. Set by
+# _call_with_retry, consumed by _log_audit, so callers never handle it.
+_last_usage: ContextVar[Optional[Usage]] = ContextVar("last_usage", default=None)
 
 MAX_RETRIES = 3
 INITIAL_RETRY_DELAY = 5  # seconds
@@ -36,11 +45,26 @@ INITIAL_RETRY_DELAY = 5  # seconds
 
 # ── Audit Logging ───────────────────────────────────────────────
 
-def _log_audit(db: Session, trace_id: str, agent_name: str, prompt_version: int,
+def _log_audit(db: Optional[Session], trace_id: str, agent_name: str, prompt_version: int,
                input_summary: str, output_summary: str, latency_ms: float,
-               status: str = "success", error_message: str = None):
-    """Log an LLM call to the audit_logs table."""
+               status: str = "success", error_message: str = None,
+               usage: Optional[Usage] = None):
+    """Write one LLM call to the audit log, with its token usage and cost.
+
+    Opens its own session when the caller has none, so calls made from inside
+    agent tools are recorded too. Never raises: a logging failure must not
+    break the request it describes.
+    """
     from database.models import AuditLog
+
+    if usage is None:
+        usage = _last_usage.get()
+    _last_usage.set(None)
+
+    own_session = db is None
+    if own_session:
+        from database.db import SessionLocal
+        db = SessionLocal()
 
     try:
         log = AuditLog(
@@ -53,11 +77,33 @@ def _log_audit(db: Session, trace_id: str, agent_name: str, prompt_version: int,
             latency_ms=latency_ms,
             status=status,
             error_message=error_message,
+            prompt_tokens=usage.prompt_tokens if usage else None,
+            completion_tokens=usage.completion_tokens if usage else None,
+            cached_tokens=usage.cached_tokens if usage else None,
+            total_tokens=usage.total_tokens if usage else None,
+            cost_usd=usage.cost_usd if usage else None,
+            request_id=request_id_var.get(),
+            endpoint=endpoint_var.get(),
         )
         db.add(log)
         db.commit()
     except Exception as e:
         logger.warning("Failed to write audit log: %s", e)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    finally:
+        if own_session:
+            db.close()
+
+
+def log_llm_call(agent_name: str, usage: Optional[Usage], latency_ms: float,
+                 status: str = "success", error_message: str = None,
+                 input_summary: str = None, output_summary: str = None) -> None:
+    """Record an LLM call made outside this module, e.g. an agent loop."""
+    _log_audit(None, str(uuid.uuid4()), agent_name, None, input_summary,
+               output_summary, latency_ms, status, error_message, usage=usage)
 
 
 # ── Prompt Versioning ───────────────────────────────────────────
@@ -77,12 +123,50 @@ def get_active_prompt(db: Session, agent_name: str) -> tuple[str, int]:
     return None, 0
 
 
+def _active_prompt(db: Optional[Session], agent_name: str) -> tuple:
+    """get_active_prompt, opening a session when the caller has none.
+
+    Agent tools call the generators without a session; without this they would
+    silently fall back to the hardcoded prompts instead of the active version.
+    """
+    if db is not None:
+        return get_active_prompt(db, agent_name)
+    from database.db import SessionLocal
+    session = SessionLocal()
+    try:
+        return get_active_prompt(session, agent_name)
+    except Exception as e:
+        logger.warning("Could not load prompt for %s: %s", agent_name, e)
+        return None, 0
+    finally:
+        session.close()
+
+
+def _finish(db: Optional[Session], trace_id: str, agent_name: str, prompt_version: int,
+            input_summary: str, text: str, start: float) -> dict:
+    """Parse the model's reply and audit the call, whether parsing succeeds or not.
+
+    Tokens are spent even when the reply is unusable, so failures are logged too.
+    """
+    try:
+        result = _parse_json_response(text)
+    except HTTPException:
+        _log_audit(db, trace_id, agent_name, prompt_version, input_summary,
+                   text[:200], (time.time() - start) * 1000,
+                   status="error", error_message="Unparseable model output")
+        raise
+    _log_audit(db, trace_id, agent_name, prompt_version, input_summary,
+               text[:200], (time.time() - start) * 1000)
+    return result
+
+
 # ── Core LLM Call with Retry ────────────────────────────────────
 
 def _call_with_retry(prompt: str, trace_id: str = None) -> str:
     """Call Groq with exponential backoff retry for rate limits."""
     if not trace_id:
         trace_id = str(uuid.uuid4())
+    _last_usage.set(None)
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -96,6 +180,7 @@ def _call_with_retry(prompt: str, trace_id: str = None) -> str:
                 max_tokens=2048,
                 response_format={"type": "json_object"},
             )
+            _last_usage.set(usage_from_openai(getattr(response, "usage", None)))
             return response.choices[0].message.content
         except Exception as e:
             error_msg = str(e).lower()
@@ -167,8 +252,7 @@ def generate_brand_profile(
     # Try versioned prompt first
     prompt_version = 0
     template = None
-    if db:
-        template, prompt_version = get_active_prompt(db, "brand")
+    template, prompt_version = _active_prompt(db, "brand")
 
     if template:
         prompt = template.format(
@@ -197,14 +281,8 @@ Return ONLY the JSON object, no extra text."""
 
     logger.info("[%s] Generating brand profile for %s", trace_id, name)
     text = _call_with_retry(prompt, trace_id)
-    result = _parse_json_response(text)
-    latency = (time.time() - start) * 1000
-
-    if db:
-        _log_audit(db, trace_id, "brand", prompt_version,
-                   f"name={name}, role={role}", text[:200], latency)
-
-    return result
+    return _finish(db, trace_id, "brand", prompt_version,
+                   f"name={name}, role={role}", text, start)
 
 
 def generate_linkedin_post(brand_profile: dict, topic: str, db: Session = None) -> dict:
@@ -214,8 +292,7 @@ def generate_linkedin_post(brand_profile: dict, topic: str, db: Session = None) 
 
     prompt_version = 0
     template = None
-    if db:
-        template, prompt_version = get_active_prompt(db, "content")
+    template, prompt_version = _active_prompt(db, "content")
 
     if template:
         prompt = template.format(
@@ -248,14 +325,8 @@ Return ONLY the JSON object, no extra text."""
 
     logger.info("[%s] Generating LinkedIn post on topic: %s", trace_id, topic)
     text = _call_with_retry(prompt, trace_id)
-    result = _parse_json_response(text)
-    latency = (time.time() - start) * 1000
-
-    if db:
-        _log_audit(db, trace_id, "content", prompt_version,
-                   f"topic={topic}", text[:200], latency)
-
-    return result
+    return _finish(db, trace_id, "content", prompt_version,
+                   f"topic={topic}", text, start)
 
 
 def generate_feedback(engagement_history: list[dict], brand_summary: str,
@@ -266,8 +337,7 @@ def generate_feedback(engagement_history: list[dict], brand_summary: str,
 
     prompt_version = 0
     template = None
-    if db:
-        template, prompt_version = get_active_prompt(db, "feedback")
+    template, prompt_version = _active_prompt(db, "feedback")
 
     if template:
         prompt = template.format(
@@ -293,14 +363,8 @@ Return ONLY the JSON object, no extra text."""
 
     logger.info("[%s] Generating feedback for %d posts", trace_id, len(engagement_history))
     text = _call_with_retry(prompt, trace_id)
-    result = _parse_json_response(text)
-    latency = (time.time() - start) * 1000
-
-    if db:
-        _log_audit(db, trace_id, "feedback", prompt_version,
-                   f"posts={len(engagement_history)}", text[:200], latency)
-
-    return result
+    return _finish(db, trace_id, "feedback", prompt_version,
+                   f"posts={len(engagement_history)}", text, start)
 
 # Weights reflect what actually drives LinkedIn engagement: nothing else matters
 # if the first line does not stop the scroll, and a post with no ask rarely gets
@@ -376,8 +440,7 @@ def predict_engagement(draft_content: str, brand_profile: dict,
 
     prompt_version = 0
     template = None
-    if db:
-        template, prompt_version = get_active_prompt(db, "predictor")
+    template, prompt_version = _active_prompt(db, "predictor")
 
     avg_likes = 0
     avg_comments = 0
@@ -429,7 +492,8 @@ Return ONLY the JSON object, no extra text."""
 
     logger.info("[%s] Predicting engagement for draft", trace_id)
     text = _call_with_retry(prompt, trace_id)
-    result = _parse_json_response(text)
+    result = _finish(db, trace_id, "predictor", prompt_version,
+                     f"draft={draft_content[:100]}", text, start)
 
     # The model judges each dimension well but is unreliable at combining them:
     # it will rate hook 30 and call-to-action 35, then still return an overall
@@ -438,11 +502,4 @@ Return ONLY the JSON object, no extra text."""
     # doing its arithmetic in Python rather than asking the model to average.
     result = _sanitise_prediction(result)
     result["overall_score"] = _composite_score(result)
-
-    latency = (time.time() - start) * 1000
-
-    if db:
-        _log_audit(db, trace_id, "predictor", prompt_version,
-                   f"draft={draft_content[:100]}", text[:200], latency)
-
     return result

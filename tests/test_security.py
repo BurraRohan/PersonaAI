@@ -12,12 +12,14 @@ import sys
 import pytest
 
 os.environ["API_KEY"] = "test-key-for-pytest"
+os.environ["ADMIN_API_KEY"] = "admin-key-for-pytest"
 os.environ["GROQ_API_KEY"] = "not-used-in-tests"
 os.environ["GROQ_MODEL"] = "openai/gpt-oss-120b"
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 AUTH = {"Authorization": "Bearer test-key-for-pytest"}
+ADMIN = {"Authorization": "Bearer admin-key-for-pytest"}
 XSS = '<img src=x onerror=alert(document.cookie)>'
 
 
@@ -112,7 +114,7 @@ class TestAgentToolsAreScoped:
 
         monkeypatch.setattr(ca, "AGENT_MODE", True)
         monkeypatch.setattr(ca, "get_content_agent", lambda *a: object())
-        monkeypatch.setattr(ca, "run_agent", lambda agent, instr: [FakeTool()])
+        monkeypatch.setattr(ca, "run_agent", lambda agent, instr, *args: [FakeTool()])
 
         res = client.post("/generate", json={"user_id": mine, "topic": "A real topic"}, headers=AUTH)
         assert res.status_code == 200
@@ -216,7 +218,7 @@ class TestInputLimits:
     @pytest.mark.parametrize("query", ["limit=0", "limit=501", "limit=-5",
                                        "agent_name=" + "a" * 51, "agent_name=DROP;"])
     def test_audit_log_query_is_bounded(self, client, query):
-        assert client.get(f"/audit-logs?{query}", headers=AUTH).status_code == 422
+        assert client.get(f"/audit-logs?{query}", headers=ADMIN).status_code == 422
 
 
 # ── Request size ──
@@ -263,7 +265,7 @@ class TestNoInternalDetailsLeak:
     def test_agent_errors_report_type_not_message(self, client, monkeypatch):
         import agents.brand_agent as ba
 
-        def boom(agent, instruction):
+        def boom(agent, instruction, *args):
             raise RuntimeError("connection to 10.0.0.5:5432 refused, password=hunter2")
 
         monkeypatch.setattr(ba, "AGENT_MODE", True)

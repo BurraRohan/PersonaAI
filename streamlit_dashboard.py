@@ -102,11 +102,100 @@ try:
 
             # Log table
             st.subheader("Recent Logs")
-            st.dataframe(audit_data, use_container_width=True)
+            st.dataframe(audit_data, width="stretch")
         else:
             st.info("No audit logs yet. Make some API calls first.")
     except Exception as e:
         st.info("Audit logs table not available yet. Run the API to create it.")
+
+    # ── Token Usage & Cost ──────────────────────────────────────
+    # Operator-only view. The user-facing app never shows any of this;
+    # the API exposes it only on admin-key routes (/costs, /audit-logs).
+
+    st.header("Token Usage & Cost")
+
+    try:
+        usage = pd.read_sql("""
+            SELECT request_id, endpoint, agent_name, prompt_tokens, cached_tokens,
+                   completion_tokens, total_tokens, cost_usd, created_at
+            FROM audit_logs
+            WHERE total_tokens IS NOT NULL
+        """, conn)
+
+        if not usage.empty:
+            usage["created_at"] = pd.to_datetime(usage["created_at"])
+            requests = usage["request_id"].nunique()
+            total_cost = usage["cost_usd"].sum()
+
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Total Cost", f"${total_cost:.4f}")
+            col2.metric("Total Tokens", f"{int(usage['total_tokens'].sum()):,}")
+            col3.metric("User Actions", requests)
+            col4.metric("Avg Cost per Action",
+                        f"${total_cost / requests:.5f}" if requests else "N/A")
+
+            # Rows named "<agent>_agent" are the ReAct reasoning loop; the rest
+            # are single structured calls (direct mode, or made by agent tools).
+            is_loop = usage["agent_name"].str.endswith("_agent")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("Input Tokens", f"{int(usage['prompt_tokens'].sum()):,}",
+                        help=f"{int(usage['cached_tokens'].sum()):,} cached (billed at half price)")
+            col2.metric("Output Tokens", f"{int(usage['completion_tokens'].sum()):,}")
+            col3.metric("Spent in Agent Loops",
+                        f"{usage.loc[is_loop, 'cost_usd'].sum() / total_cost * 100:.0f}%"
+                        if total_cost else "N/A")
+
+            left, right = st.columns(2)
+            with left:
+                st.subheader("Cost by Agent")
+                st.bar_chart(usage.groupby("agent_name")["cost_usd"].sum()
+                             .sort_values(ascending=False))
+            with right:
+                st.subheader("Cost per Day")
+                per_day = usage.set_index("created_at")["cost_usd"].resample("D").sum()
+                per_day.index = per_day.index.strftime("%d %b")  # label days, not a timeline
+                st.bar_chart(per_day)
+
+            st.subheader("Cost by Endpoint")
+            by_endpoint = (
+                usage.dropna(subset=["endpoint"])
+                .groupby("endpoint")
+                .agg(requests=("request_id", "nunique"),
+                     total_tokens=("total_tokens", "sum"),
+                     cost_usd=("cost_usd", "sum"))
+                .sort_values("cost_usd", ascending=False)
+            )
+            by_endpoint["avg_cost_per_request"] = by_endpoint["cost_usd"] / by_endpoint["requests"]
+            st.dataframe(by_endpoint.style.format({
+                "cost_usd": "${:.6f}", "avg_cost_per_request": "${:.6f}",
+                "total_tokens": "{:,.0f}",
+            }), width="stretch")
+
+            st.subheader("Most Expensive Actions")
+            per_request = (
+                usage.dropna(subset=["request_id"])
+                .groupby("request_id")
+                .agg(endpoint=("endpoint", "first"),
+                     llm_calls=("agent_name", "count"),
+                     total_tokens=("total_tokens", "sum"),
+                     cost_usd=("cost_usd", "sum"),
+                     at=("created_at", "min"))
+                .sort_values("cost_usd", ascending=False)
+                .head(10)
+            )
+            st.dataframe(per_request.style.format({
+                "cost_usd": "${:.6f}", "total_tokens": "{:,.0f}",
+            }), width="stretch")
+        else:
+            st.info("No token usage recorded yet. Generate a profile or post to see costs.")
+
+        untracked = pd.read_sql(
+            "SELECT COUNT(*) AS n FROM audit_logs WHERE total_tokens IS NULL", conn)["n"][0]
+        if untracked:
+            st.caption(f"{untracked} older LLM call(s) were logged before usage tracking "
+                       "and are not included in these totals.")
+    except Exception:
+        st.info("Token usage columns not available yet. Restart the API once to add them.")
 
     # ── Prompt Versions ─────────────────────────────────────────
 
@@ -120,7 +209,7 @@ try:
         """, conn)
 
         if not prompts.empty:
-            st.dataframe(prompts, use_container_width=True)
+            st.dataframe(prompts, width="stretch")
         else:
             st.info("No prompt templates found.")
     except Exception as e:

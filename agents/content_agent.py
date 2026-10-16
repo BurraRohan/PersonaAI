@@ -203,7 +203,7 @@ def generate_post(db: Session, request: GenerateRequest) -> GenerateResponse:
 
     trace: list = []
     try:
-        messages = run_agent(get_content_agent(request.user_id, request.topic), instruction)
+        messages = run_agent(get_content_agent(request.user_id, request.topic), instruction, "content")
         trace = extract_trace(messages)
         post_id = find_tool_result(messages, "create_and_save_post", "post_id")
 

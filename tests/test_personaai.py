@@ -19,6 +19,7 @@ import pytest
 # environment (CI, a shell export, a .env already loaded) has different ones.
 # setdefault silently loses that race and every authenticated request 403s.
 os.environ["API_KEY"] = "test-key-for-pytest"
+os.environ["ADMIN_API_KEY"] = "admin-key-for-pytest"
 os.environ["GROQ_API_KEY"] = "not-used-in-tests"
 os.environ["GROQ_MODEL"] = "openai/gpt-oss-120b"
 

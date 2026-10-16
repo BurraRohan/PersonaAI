@@ -199,7 +199,7 @@ def get_feedback(db: Session, request: FeedbackRequest) -> FeedbackResponse:
 
     trace: list = []
     try:
-        messages = run_agent(get_feedback_agent(request.user_id, brand_summary), instruction)
+        messages = run_agent(get_feedback_agent(request.user_id, brand_summary), instruction, "feedback")
         trace = extract_trace(messages)
 
         summary = find_tool_result(messages, "generate_strategy_feedback", "performance_summary")

@@ -104,13 +104,39 @@ def find_tool_result(messages: list, tool_name: str, key: str) -> Optional[Any]:
     return None
 
 
-def run_agent(agent, instruction: str) -> list:
-    """Invoke a compiled ReAct agent and return its message list."""
-    result = agent.invoke(
-        {"messages": [{"role": "user", "content": instruction}]},
-        config={"recursion_limit": AGENT_RECURSION_LIMIT},
-    )
+def run_agent(agent, instruction: str, agent_name: str = "agent") -> list:
+    """Invoke a compiled ReAct agent and return its message list.
+
+    The loop's own model calls do not pass through llm_service, so their token
+    usage is summed here from the messages and written as one audit-log row.
+    Calls made by the agent's tools are logged separately by llm_service and
+    share the same request id, so the two add up to the true cost of the run.
+    """
+    import time
+    from services.llm_service import log_llm_call
+    from utils.costs import usage_from_messages
+
+    start = time.time()
+    try:
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": instruction}]},
+            config={"recursion_limit": AGENT_RECURSION_LIMIT},
+        )
+    except Exception as exc:
+        # Tokens were spent but the partial messages are lost with the
+        # exception, so the row records the failure without a usage figure.
+        log_llm_call(f"{agent_name}_agent", None, (time.time() - start) * 1000,
+                     status="error", error_message=type(exc).__name__)
+        raise
+
     messages = result.get("messages", [])
+    steps = sum(1 for m in messages if getattr(m, "type", "") == "ai")
+    log_llm_call(
+        f"{agent_name}_agent",
+        usage_from_messages(messages),
+        (time.time() - start) * 1000,
+        input_summary=f"agent loop, {steps} model step(s)",
+    )
     logger.info(
         "[agent] completed with %d messages, %d trace entries",
         len(messages), len(extract_trace(messages)),

@@ -38,7 +38,7 @@ from agents.brand_agent import create_brand_profile
 from agents.content_agent import generate_post
 from agents.feedback_agent import get_feedback
 from agents.orchestrator import run_full_workflow
-from utils.auth import verify_api_key
+from utils.auth import verify_admin_key, verify_api_key
 from utils.rate_limiter import limiter
 from utils.observability import setup_logging, setup_prometheus
 
@@ -818,6 +818,10 @@ from utils.security import SecurityHeadersMiddleware, BodySizeLimitMiddleware
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(BodySizeLimitMiddleware)
 
+# Tag each request so every LLM call it triggers can be costed together.
+from utils.request_context import RequestContextMiddleware
+app.add_middleware(RequestContextMiddleware)
+
 # Prometheus metrics (behind the API key unless METRICS_PUBLIC=1)
 setup_prometheus(app)
 
@@ -970,14 +974,14 @@ def rollback_prompt(agent_name: AgentName, version: PathID, request: Request, db
 
 # ── Fix 5: Audit Log Endpoint ──────────────────────────────────
 
-@app.get("/audit-logs", tags=["Observability"], dependencies=[Depends(verify_api_key)])
+@app.get("/audit-logs", tags=["Operator"], dependencies=[Depends(verify_admin_key)])
 def get_audit_logs(
     request: Request,
     agent_name: Annotated[Optional[str], Query(max_length=50, pattern=r"^[a-z_]+$")] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     db: Session = Depends(get_db),
 ):
-    """Retrieve recent audit logs with optional agent name filter."""
+    """Recent LLM calls with latency, token usage and cost. Admin key required."""
     from database.models import AuditLog
 
     query = db.query(AuditLog).order_by(AuditLog.created_at.desc())
@@ -989,16 +993,129 @@ def get_audit_logs(
         {
             "id": log.id,
             "trace_id": log.trace_id,
+            "request_id": log.request_id,
+            "endpoint": log.endpoint,
             "agent_name": log.agent_name,
             "prompt_version": log.prompt_version,
             "model": log.model,
             "latency_ms": log.latency_ms,
             "status": log.status,
             "error_message": log.error_message,
+            "prompt_tokens": log.prompt_tokens,
+            "completion_tokens": log.completion_tokens,
+            "cached_tokens": log.cached_tokens,
+            "total_tokens": log.total_tokens,
+            "cost_usd": log.cost_usd,
             "created_at": log.created_at.isoformat() if log.created_at else None,
         }
         for log in logs
     ]
+
+
+@app.get("/costs", tags=["Operator"], dependencies=[Depends(verify_admin_key)])
+def get_costs(
+    request: Request,
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
+    db: Session = Depends(get_db),
+):
+    """Token usage and cost summary for the operator. Admin key required.
+
+    Cost per call is stored when the call is made, so these totals reflect the
+    prices that applied at the time. Calls logged before usage tracking existed
+    have no token data and are counted separately rather than as zero.
+    """
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import func
+    from database.models import AuditLog
+    from utils.costs import INPUT_PRICE_PER_MILLION, OUTPUT_PRICE_PER_MILLION
+    from utils.config import GROQ_MODEL
+
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    window = db.query(AuditLog).filter(AuditLog.created_at >= since)
+    with_usage = window.filter(AuditLog.total_tokens.isnot(None))
+
+    def money(value) -> float:
+        return round(float(value or 0), 6)
+
+    totals = with_usage.with_entities(
+        func.count(AuditLog.id),
+        func.count(func.distinct(AuditLog.request_id)),
+        func.sum(AuditLog.prompt_tokens),
+        func.sum(AuditLog.cached_tokens),
+        func.sum(AuditLog.completion_tokens),
+        func.sum(AuditLog.total_tokens),
+        func.sum(AuditLog.cost_usd),
+    ).one()
+
+    by_agent = (
+        with_usage.with_entities(
+            AuditLog.agent_name,
+            func.count(AuditLog.id),
+            func.sum(AuditLog.total_tokens),
+            func.sum(AuditLog.cost_usd),
+        )
+        .group_by(AuditLog.agent_name)
+        .order_by(func.sum(AuditLog.cost_usd).desc())
+        .all()
+    )
+
+    by_endpoint = (
+        with_usage.filter(AuditLog.endpoint.isnot(None))
+        .with_entities(
+            AuditLog.endpoint,
+            func.count(func.distinct(AuditLog.request_id)),
+            func.sum(AuditLog.total_tokens),
+            func.sum(AuditLog.cost_usd),
+        )
+        .group_by(AuditLog.endpoint)
+        .order_by(func.sum(AuditLog.cost_usd).desc())
+        .all()
+    )
+
+    by_day = (
+        with_usage.with_entities(
+            func.date(AuditLog.created_at),
+            func.sum(AuditLog.total_tokens),
+            func.sum(AuditLog.cost_usd),
+        )
+        .group_by(func.date(AuditLog.created_at))
+        .order_by(func.date(AuditLog.created_at))
+        .all()
+    )
+
+    return {
+        "period_days": days,
+        "pricing": {
+            "model": GROQ_MODEL,
+            "input_usd_per_million": INPUT_PRICE_PER_MILLION,
+            "output_usd_per_million": OUTPUT_PRICE_PER_MILLION,
+        },
+        "totals": {
+            "llm_calls": totals[0] or 0,
+            "requests": totals[1] or 0,
+            "prompt_tokens": int(totals[2] or 0),
+            "cached_tokens": int(totals[3] or 0),
+            "completion_tokens": int(totals[4] or 0),
+            "total_tokens": int(totals[5] or 0),
+            "cost_usd": money(totals[6]),
+            "calls_without_usage": window.filter(AuditLog.total_tokens.is_(None)).count(),
+        },
+        "by_agent": [
+            {"agent_name": name, "calls": calls, "total_tokens": int(tokens or 0),
+             "cost_usd": money(cost)}
+            for name, calls, tokens, cost in by_agent
+        ],
+        "by_endpoint": [
+            {"endpoint": ep, "requests": reqs, "total_tokens": int(tokens or 0),
+             "cost_usd": money(cost),
+             "avg_cost_per_request_usd": money((cost or 0) / reqs) if reqs else 0.0}
+            for ep, reqs, tokens, cost in by_endpoint
+        ],
+        "by_day": [
+            {"date": str(day), "total_tokens": int(tokens or 0), "cost_usd": money(cost)}
+            for day, tokens, cost in by_day
+        ],
+    }
 
 # ── Post History Endpoint ───────────────────────────────
 

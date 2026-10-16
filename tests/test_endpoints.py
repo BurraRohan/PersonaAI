@@ -16,6 +16,7 @@ import pytest
 # environment (CI, a shell export, a .env already loaded) has different ones.
 # setdefault silently loses that race and every authenticated request 403s.
 os.environ["API_KEY"] = "test-key-for-pytest"
+os.environ["ADMIN_API_KEY"] = "admin-key-for-pytest"
 os.environ["GROQ_API_KEY"] = "not-used-in-tests"
 os.environ["GROQ_MODEL"] = "openai/gpt-oss-120b"
 
@@ -92,7 +93,7 @@ class TestBrandEndpoint:
                 self.name = name
                 self.content = content
 
-        def fake_run(agent, instruction):
+        def fake_run(agent, instruction, *args):
             # The save tool writes a real row, exactly as the live agent would.
             saved = ba.save_brand_profile.invoke({
                 "name": "Ada Lovelace", "role": "ML Engineer", "industry": "AI/ML",
@@ -123,7 +124,7 @@ class TestBrandEndpoint:
         """A broken agent must not 500 the endpoint."""
         import agents.brand_agent as ba
 
-        def boom(agent, instruction):
+        def boom(agent, instruction, *args):
             raise RuntimeError("groq unreachable")
 
         monkeypatch.setattr(ba, "AGENT_MODE", True)
@@ -186,7 +187,7 @@ class TestAgentModeSwitch:
     def test_agent_mode_off_uses_direct_path(self, client, monkeypatch):
         import agents.brand_agent as ba
 
-        def should_not_run(agent, instruction):
+        def should_not_run(agent, instruction, *args):
             raise AssertionError("run_agent was called despite AGENT_MODE=0")
 
         monkeypatch.setattr(ba, "AGENT_MODE", False)

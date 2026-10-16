@@ -46,6 +46,13 @@ _ADDED_COLUMNS = [
     ("posts", "review_note", "TEXT"),
     ("posts", "original_content", "TEXT"),
     ("posts", "edited_at", "DATETIME"),
+    ("audit_logs", "prompt_tokens", "INTEGER"),
+    ("audit_logs", "completion_tokens", "INTEGER"),
+    ("audit_logs", "cached_tokens", "INTEGER"),
+    ("audit_logs", "total_tokens", "INTEGER"),
+    ("audit_logs", "cost_usd", "FLOAT"),
+    ("audit_logs", "request_id", "VARCHAR(36)"),
+    ("audit_logs", "endpoint", "VARCHAR(100)"),
 ]
 
 

@@ -112,4 +112,18 @@ class AuditLog(Base):
     status = Column(String(20), nullable=False, default="success")  # success, error, retry
     error_message = Column(Text, nullable=True)
 
+    # Token usage and cost, captured from the provider's response. Cost is
+    # stored at the time of the call so a later price change does not rewrite
+    # history. All of this is operator data: admin routes and Streamlit only.
+    prompt_tokens = Column(Integer, nullable=True)
+    completion_tokens = Column(Integer, nullable=True)
+    cached_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    cost_usd = Column(Float, nullable=True)
+
+    # Groups every LLM call made while serving one HTTP request, so the cost of
+    # a whole action (an agent run plus the calls its tools make) can be summed.
+    request_id = Column(String(36), nullable=True, index=True)
+    endpoint = Column(String(100), nullable=True)
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

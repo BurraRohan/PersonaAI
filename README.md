@@ -36,9 +36,10 @@ Define Brand → Generate Post → Evaluate → Edit & Approve → Publish → L
 - **Feedback loop** — analyses recorded engagement and recommends specific changes, referencing actual post topics and numbers
 - **Prompt versioning** — every prompt lives in the database with a version number; rollback to any prior version takes one API call and no redeploy. Five content-voice versions ship, from influencer register to plain technical prose
 - **Audit logging** — every LLM call recorded with a trace ID, model, prompt version, latency and status
+- **Token cost tracking** — every LLM call, including each step of an agent loop, records its input, cached and output tokens and what it cost. Spend by agent, endpoint and day is visible only to the operator, behind a separate admin key
 - **Security hardening** — bearer token auth, rate limiting, bounded inputs, sanitised model output, a strict Content-Security-Policy, and agent tools scoped so prompt text cannot redirect them to another profile
 - **Prometheus metrics** — request counts, latency histograms and error rates at `/metrics` (API key required)
-- **Streamlit dashboard** — engagement trends and audit log inspection
+- **Streamlit dashboard** — engagement trends, audit log inspection and token spend
 - **Docker packaging** — `docker-compose` with a named volume and health checks
 - **Continuous integration** — GitHub Actions runs the full test suite on every push
 
@@ -68,7 +69,7 @@ pip install -r requirements.txt
 copy .env.template .env    # Windows
 ```
 
-Open `.env` and fill in the three required values: `GROQ_API_KEY`, `API_KEY` and `GROQ_MODEL`. The app refuses to start if any is missing rather than falling back to a default. Generate an API key with:
+Open `.env` and fill in the three required values: `GROQ_API_KEY`, `API_KEY` and `GROQ_MODEL`. The app refuses to start if any is missing rather than falling back to a default. To see token costs, also set `ADMIN_API_KEY` to a second, different key. Generate a key with:
 
 ```bash
 python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -85,6 +86,7 @@ uvicorn main:app --reload
 | App UI             | http://127.0.0.1:8000                                                             |
 | Swagger docs       | http://127.0.0.1:8000/docs                                                        |
 | Prometheus metrics | http://127.0.0.1:8000/metrics (API key required — use Swagger's Authorize button) |
+| Token cost summary | http://127.0.0.1:8000/costs (admin key required — the `AdminKey` lock in Swagger) |
 
 Schema changes and new prompt versions are applied on startup, so an existing
 database never needs to be reset.
@@ -97,11 +99,11 @@ The UI asks for your API key once and keeps it in `localStorage`, so it survives
 pytest -q
 ```
 
-141 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output. `tests/test_security.py` covers each protection listed under [Security](#security).
+168 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output. `tests/test_security.py` covers each protection listed under [Security](#security), and `tests/test_costs.py` covers the cost arithmetic and who can see it.
 
 The same suite runs on GitHub Actions on every push to `main` (see
 `.github/workflows/tests.yml`). Because nothing hits the network, CI needs only
-placeholder values for `API_KEY`, `GROQ_API_KEY` and `GROQ_MODEL` — no real
+placeholder values for `API_KEY`, `ADMIN_API_KEY`, `GROQ_API_KEY` and `GROQ_MODEL` — no real
 credentials are stored on GitHub.
 
 ### Streamlit dashboard
@@ -304,31 +306,76 @@ should be added as a new version rather than an edit to an old one.
 
 ---
 
+## Token Usage & Cost
+
+Every response from Groq reports how many tokens it used. PersonaAI stores those
+counts with each audit-log row and works out the cost of that call there and then:
+
+```
+cost = (uncached input × input price) + (cached input × input price × 0.5) + (output × output price)
+```
+
+The prices default to Groq's rates for `openai/gpt-oss-120b`, $0.15 per million
+input tokens and $0.60 per million output tokens, with cached input billed at
+half price. Both are set in `.env`, so a model or price change is a config edit.
+Because cost is stored at the time of the call, a later price change never
+rewrites what earlier runs cost.
+
+**Agent loops are counted step by step.** A ReAct agent calls the model once per
+step, and each step resends the conversation so far, so a loop costs noticeably
+more than one direct call. The loop is logged as `<agent>_agent` (for example
+`brand_agent`), separate from the structured calls its tools make (`brand`).
+Comparing the two shows what agent mode costs over `AGENT_MODE=0`.
+
+**One user action, one request id.** Every LLM call made while serving a request
+shares that request's id and endpoint, so the cost of "create a profile" or
+"generate a post" is the sum of its rows, not a guess.
+
+**Where to see it:**
+
+| View                 | What it shows                                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `GET /costs?days=30` | Totals, then breakdowns by agent, by endpoint (with average cost per request) and by day                            |
+| `GET /audit-logs`    | Each call with its tokens, cost, request id and endpoint                                                            |
+| Streamlit dashboard  | Total spend, cost per action, share spent in agent loops, cost by agent and per day, and the most expensive actions |
+
+**Only the operator sees it.** Both routes take `ADMIN_API_KEY`, not the `API_KEY`
+the UI uses; the user's key gets a 403, and the UI never requests them. If
+`ADMIN_API_KEY` is not set, the routes are switched off. The Streamlit dashboard
+reads the database directly and is meant to run on your own machine.
+
+To check the figures against what Groq actually billed, run an action, then
+compare its row in `/audit-logs` with the matching request in the
+usage page of the [Groq console](https://console.groq.com).
+
+---
+
 ## API Endpoints
 
-Every endpoint except `/health` requires an `Authorization: Bearer <your-api-key>` header.
+Every endpoint except `/health` requires an `Authorization: Bearer <your-api-key>` header. The two operator routes, `/costs` and `/audit-logs`, take `ADMIN_API_KEY` instead.
 
-| Method | Endpoint                                   | Description                                                | Rate limit |
-| ------ | ------------------------------------------ | ---------------------------------------------------------- | ---------- |
-| POST   | `/brand`                                   | Create a brand profile (brand agent)                       | 10/min     |
-| PATCH  | `/brand/{user_id}`                         | Update any profile field; only fields sent are changed     | 10/min     |
-| DELETE | `/brand/{user_id}`                         | Delete a profile with its posts and engagement records     | 10/min     |
-| POST   | `/generate`                                | Generate a LinkedIn post (content agent)                   | 10/min     |
-| POST   | `/predict`                                 | Score a saved post (by `post_id`) or pasted draft text     | 10/min     |
-| GET    | `/posts/pending/{user_id}`                 | Posts awaiting a human decision                            | —          |
-| GET    | `/posts/{post_id}`                         | One post in full, with status, edit history and engagement | —          |
-| PATCH  | `/posts/{post_id}`                         | Edit a pending post's text or hashtags                     | 30/min     |
-| POST   | `/posts/{post_id}/review`                  | Approve or reject a generated post                         | 30/min     |
-| POST   | `/engagement`                              | Log likes, comments and shares for an **approved** post    | 30/min     |
-| POST   | `/feedback`                                | Strategy feedback from engagement history (feedback agent) | 10/min     |
-| POST   | `/orchestrate`                             | Run the full graph: brand → content → feedback             | 5/min      |
-| GET    | `/dashboard/{user_id}`                     | Brand info, totals, averages, best topic, post list        | —          |
-| GET    | `/history/{user_id}`                       | All posts and engagement for a profile                     | —          |
-| GET    | `/prompts/{agent_name}`                    | List prompt versions for an agent                          | —          |
-| POST   | `/prompts/{agent_name}/rollback/{version}` | Activate a specific prompt version                         | —          |
-| GET    | `/audit-logs`                              | Recent LLM calls, filterable by `agent_name` (max 500)     | —          |
-| GET    | `/metrics`                                 | Prometheus metrics                                         | —          |
-| GET    | `/health`                                  | Health check (public)                                      | —          |
+| Method | Endpoint                                   | Description                                                                            | Rate limit |
+| ------ | ------------------------------------------ | -------------------------------------------------------------------------------------- | ---------- |
+| POST   | `/brand`                                   | Create a brand profile (brand agent)                                                   | 10/min     |
+| PATCH  | `/brand/{user_id}`                         | Update any profile field; only fields sent are changed                                 | 10/min     |
+| DELETE | `/brand/{user_id}`                         | Delete a profile with its posts and engagement records                                 | 10/min     |
+| POST   | `/generate`                                | Generate a LinkedIn post (content agent)                                               | 10/min     |
+| POST   | `/predict`                                 | Score a saved post (by `post_id`) or pasted draft text                                 | 10/min     |
+| GET    | `/posts/pending/{user_id}`                 | Posts awaiting a human decision                                                        | —          |
+| GET    | `/posts/{post_id}`                         | One post in full, with status, edit history and engagement                             | —          |
+| PATCH  | `/posts/{post_id}`                         | Edit a pending post's text or hashtags                                                 | 30/min     |
+| POST   | `/posts/{post_id}/review`                  | Approve or reject a generated post                                                     | 30/min     |
+| POST   | `/engagement`                              | Log likes, comments and shares for an **approved** post                                | 30/min     |
+| POST   | `/feedback`                                | Strategy feedback from engagement history (feedback agent)                             | 10/min     |
+| POST   | `/orchestrate`                             | Run the full graph: brand → content → feedback                                         | 5/min      |
+| GET    | `/dashboard/{user_id}`                     | Brand info, totals, averages, best topic, post list                                    | —          |
+| GET    | `/history/{user_id}`                       | All posts and engagement for a profile                                                 | —          |
+| GET    | `/prompts/{agent_name}`                    | List prompt versions for an agent                                                      | —          |
+| POST   | `/prompts/{agent_name}/rollback/{version}` | Activate a specific prompt version                                                     | —          |
+| GET    | `/audit-logs`                              | Recent LLM calls with tokens and cost, filterable by `agent_name` (max 500). Admin key | —          |
+| GET    | `/costs`                                   | Token and cost summary over the last `days` (1–365). Admin key                         | —          |
+| GET    | `/metrics`                                 | Prometheus metrics                                                                     | —          |
+| GET    | `/health`                                  | Health check (public)                                                                  | —          |
 
 Valid `agent_name` values: `brand`, `content`, `feedback`, `predictor`.
 
@@ -336,17 +383,18 @@ Valid `agent_name` values: `brand`, `content`, `feedback`, `predictor`.
 
 ## Security
 
-| Area             | Protection                                                                                                                                         |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Authentication   | Bearer token on every data route, compared in constant time. No default key: the app will not start without one.                                   |
-| Model output     | Scores are coerced to integers and ranges to digits before leaving the server, and the UI escapes everything it renders.                           |
-| Prompt injection | Agent tools are built per request with the profile id and topic fixed in code, so text in a prompt cannot redirect them to another profile's data. |
-| Input            | Every field has a length limit, numbers are bounded, IDs are range-checked, and request bodies are capped at 64 KB.                                |
-| Browser          | Strict Content-Security-Policy (scripts from this origin only, no inline code), plus `nosniff`, `DENY` framing and `no-referrer`.                  |
-| Errors           | Provider and internal error text goes to the server log; clients get a generic message with a trace id.                                            |
-| Observability    | `/metrics` requires the API key unless `METRICS_PUBLIC=1`.                                                                                         |
-| Container        | Runs as an unprivileged user, not root.                                                                                                            |
-| Dependencies     | Pinned to patched versions and checked with `pip-audit`.                                                                                           |
+| Area             | Protection                                                                                                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication   | Bearer token on every data route, compared in constant time. No default key: the app will not start without one.                                                 |
+| Model output     | Scores are coerced to integers and ranges to digits before leaving the server, and the UI escapes everything it renders.                                         |
+| Prompt injection | Agent tools are built per request with the profile id and topic fixed in code, so text in a prompt cannot redirect them to another profile's data.               |
+| Input            | Every field has a length limit, numbers are bounded, IDs are range-checked, and request bodies are capped at 64 KB.                                              |
+| Browser          | Strict Content-Security-Policy (scripts from this origin only, no inline code), plus `nosniff`, `DENY` framing and `no-referrer`.                                |
+| Errors           | Provider and internal error text goes to the server log; clients get a generic message with a trace id.                                                          |
+| Observability    | `/metrics` requires the API key unless `METRICS_PUBLIC=1`.                                                                                                       |
+| Operator data    | Token usage and cost are served only on routes that take a separate `ADMIN_API_KEY`. The user's key is refused, and the routes are off when no admin key is set. |
+| Container        | Runs as an unprivileged user, not root.                                                                                                                          |
+| Dependencies     | Pinned to patched versions and checked with `pip-audit`.                                                                                                         |
 
 ---
 
@@ -372,13 +420,15 @@ PersonaAI/
 ├── utils/
 │   ├── agent_runtime.py     # Agent execution + tool-call trace capture
 │   ├── config.py            # AGENT_MODE and GROQ_MODEL, read from .env
-│   ├── auth.py              # API key authentication
+│   ├── auth.py              # API key and admin key authentication
+│   ├── costs.py             # Token usage and cost per call
+│   ├── request_context.py   # Request id and endpoint for cost attribution
 │   ├── security.py          # Security headers and request size limit
 │   ├── rate_limiter.py      # Request rate limiting
 │   └── observability.py     # Prometheus metrics + structured logging
 ├── static/                  # Frontend UI (6-tab dashboard)
-├── tests/                   # pytest suite (141 tests, no network required)
-├── streamlit_dashboard.py   # Observability dashboard
+├── tests/                   # pytest suite (168 tests, no network required)
+├── streamlit_dashboard.py   # Observability and cost dashboard
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
@@ -389,16 +439,19 @@ PersonaAI/
 
 ## Environment Variables
 
-| Variable            | Description                                                           | Required | Default                                       |
-| ------------------- | --------------------------------------------------------------------- | -------- | --------------------------------------------- |
-| `GROQ_API_KEY`      | Groq API key — [console.groq.com/keys](https://console.groq.com/keys) | Yes      | — (app will not start)                        |
-| `API_KEY`           | Bearer token protecting the API                                       | Yes      | — (app will not start)                        |
-| `GROQ_MODEL`        | Groq model used by all agents and LLM calls                           | Yes      | — (app will not start)                        |
-| `AGENT_MODE`        | `1` runs the ReAct agents, `0` uses one direct LLM call               | No       | `1`                                           |
-| `DATABASE_URL`      | SQLAlchemy connection string                                          | No       | `sqlite:///./personaai.db`                    |
-| `PERSONAAI_DB_PATH` | SQLite path used by the Streamlit dashboard                           | No       | `personaai.db`                                |
-| `ALLOWED_ORIGINS`   | Comma-separated CORS origins                                          | No       | `http://localhost:8000,http://127.0.0.1:8000` |
-| `METRICS_PUBLIC`    | `1` makes `/metrics` public; only for private networks                | No       | `0`                                           |
+| Variable                       | Description                                                             | Required | Default                                       |
+| ------------------------------ | ----------------------------------------------------------------------- | -------- | --------------------------------------------- |
+| `GROQ_API_KEY`                 | Groq API key — [console.groq.com/keys](https://console.groq.com/keys)   | Yes      | — (app will not start)                        |
+| `API_KEY`                      | Bearer token protecting the API                                         | Yes      | — (app will not start)                        |
+| `GROQ_MODEL`                   | Groq model used by all agents and LLM calls                             | Yes      | — (app will not start)                        |
+| `AGENT_MODE`                   | `1` runs the ReAct agents, `0` uses one direct LLM call                 | No       | `1`                                           |
+| `DATABASE_URL`                 | SQLAlchemy connection string                                            | No       | `sqlite:///./personaai.db`                    |
+| `PERSONAAI_DB_PATH`            | SQLite path used by the Streamlit dashboard                             | No       | `personaai.db`                                |
+| `ALLOWED_ORIGINS`              | Comma-separated CORS origins                                            | No       | `http://localhost:8000,http://127.0.0.1:8000` |
+| `METRICS_PUBLIC`               | `1` makes `/metrics` public; only for private networks                  | No       | `0`                                           |
+| `ADMIN_API_KEY`                | Separate key for `/costs` and `/audit-logs`; must differ from `API_KEY` | No       | — (operator routes off)                       |
+| `LLM_INPUT_PRICE_PER_MILLION`  | Input price in USD per million tokens                                   | No       | `0.15`                                        |
+| `LLM_OUTPUT_PRICE_PER_MILLION` | Output price in USD per million tokens                                  | No       | `0.60`                                        |
 
 The model name lives only in `.env` — never in the source — so a provider
 deprecation is a one-line config change. It is deliberately not auto-selected:
@@ -414,7 +467,7 @@ model per call, so past runs stay reproducible. Check
 
 **Agents** — LangChain tools, LangGraph (`create_react_agent` + `StateGraph`), Groq
 
-**Observability** — Prometheus, Streamlit, database-backed audit logs
+**Observability** — Prometheus, Streamlit, database-backed audit logs, per-call token and cost accounting
 
 **Security** — Bearer token auth, SlowAPI rate limiting, Content-Security-Policy, input bounds, output sanitising, pip-audit
 
@@ -434,6 +487,7 @@ Stated plainly, because they shape how the results should be read:
 - **No HTTPS out of the box.** Serve it behind a TLS-terminating proxy before exposing it beyond your own machine.
 - **SQLite concurrency.** Fine for a single instance; a multi-worker deployment under write load should move to PostgreSQL.
 - **Agent reliability varies.** The model occasionally skips a tool call in a three-step chain. The fallback path covers this, but `execution_mode` is worth checking when a run looks unusual.
+- **Cost is computed, not billed.** Figures come from the token counts Groq returns, priced at the rates in `.env`. Groq's console remains the record of what was actually charged; if Groq changes its prices, update `.env` to match. An agent run that fails partway records the failure but not the tokens spent before it.
 - **Not deployed.** The project is containerized and runs locally or via `docker-compose`, but there is no hosted instance.
 
 ---
