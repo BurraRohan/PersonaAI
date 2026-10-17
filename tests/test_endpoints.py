@@ -728,3 +728,27 @@ class TestSchemaMigration:
         assert row == ("old post", "approved")
 
         assert ensure_schema() == []
+
+
+class TestHistory:
+    def test_history_counts_posts_by_status(self, client, monkeypatch):
+        """/history once crashed with a NameError as soon as a profile had posts."""
+        import agents.brand_agent as ba
+        import agents.content_agent as ca
+        monkeypatch.setattr(ba, "AGENT_MODE", False)
+        monkeypatch.setattr(ca, "AGENT_MODE", False)
+
+        uid = client.post("/brand", json={"name": "Ada", "role": "r", "industry": "i",
+                                          "goals": "g", "preferred_tone": "t"},
+                          headers=AUTH).json()["id"]
+        ids = [client.post("/generate", json={"user_id": uid, "topic": f"Topic number {n}"},
+                           headers=AUTH).json()["post_id"] for n in range(3)]
+        client.post(f"/posts/{ids[0]}/review", json={"decision": "approve"}, headers=AUTH)
+        client.post(f"/posts/{ids[1]}/review", json={"decision": "reject"}, headers=AUTH)
+
+        res = client.get(f"/history/{uid}", headers=AUTH)
+        assert res.status_code == 200
+        body = res.json()
+        assert (body["total_posts"], body["approved_posts"], body["rejected_posts"],
+                body["pending_posts"]) == (3, 1, 1, 1)
+        assert {p["status"] for p in body["posts"]} == {"approved", "rejected", "pending"}

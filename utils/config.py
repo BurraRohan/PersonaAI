@@ -50,3 +50,26 @@ if not GROQ_MODEL:
         "e.g. GROQ_MODEL=openai/gpt-oss-120b — see "
         "https://console.groq.com/docs/deprecations for current models."
     )
+
+
+# Output token cap for each structured LLM call.
+#
+# gpt-oss is a reasoning model: its hidden reasoning counts against this cap
+# as well as the visible answer. At 2048, the longer content prompts (v4, v5)
+# often spent the whole budget reasoning and returned nothing, which Groq
+# reports as json_validate_failed. On Groq's free tier the prompt plus this cap
+# must also fit inside the 8K tokens-per-minute limit, so it is not set higher.
+def _as_int(value, default: int, low: int, high: int) -> int:
+    try:
+        return min(high, max(low, int(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+LLM_MAX_TOKENS = _as_int(os.getenv("LLM_MAX_TOKENS"), 4096, 256, 32768)
+
+# How much a gpt-oss model reasons before answering: low, medium or high.
+# Unset means Groq's default. Lower effort spends fewer output tokens, so it is
+# cheaper and faster; whether quality holds is a question for evals/run_eval.
+_effort = (os.getenv("LLM_REASONING_EFFORT") or "").strip().lower()
+LLM_REASONING_EFFORT = _effort if _effort in {"low", "medium", "high"} else None

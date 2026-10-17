@@ -35,8 +35,10 @@ Define Brand → Generate Post → Evaluate → Edit & Approve → Publish → L
 - **Profile management** — create, edit and delete profiles. Edits apply to posts generated afterwards; deletion removes posts and engagement records with no orphaned rows, while audit logs are kept
 - **Feedback loop** — analyses recorded engagement and recommends specific changes, referencing actual post topics and numbers
 - **Prompt versioning** — every prompt lives in the database with a version number; rollback to any prior version takes one API call and no redeploy. Five content-voice versions ship, from influencer register to plain technical prose
+- **Prompt evaluation** — a harness runs each prompt version over a fixed set of test cases, scores every post against the prompt's own writing rules, and ranks versions by quality and cost per post
 - **Audit logging** — every LLM call recorded with a trace ID, model, prompt version, latency and status
 - **Token cost tracking** — every LLM call, including each step of an agent loop, records its input, cached and output tokens and what it cost. Spend by agent, endpoint and day is visible only to the operator, behind a separate admin key
+- **Daily budget guard** — a daily spend limit. Past 80% the agents pause and requests take the cheaper direct path; at 100% generation stops until midnight UTC while the rest of the app keeps working. Users see a plain message, never the amounts
 - **Security hardening** — bearer token auth, rate limiting, bounded inputs, sanitised model output, a strict Content-Security-Policy, and agent tools scoped so prompt text cannot redirect them to another profile
 - **Prometheus metrics** — request counts, latency histograms and error rates at `/metrics` (API key required)
 - **Streamlit dashboard** — engagement trends, audit log inspection and token spend
@@ -99,7 +101,7 @@ The UI asks for your API key once and keeps it in `localStorage`, so it survives
 pytest -q
 ```
 
-173 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output. `tests/test_security.py` covers each protection listed under [Security](#security), and `tests/test_costs.py` covers the cost arithmetic and who can see it.
+244 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output. `tests/test_security.py` covers each protection listed under [Security](#security), `tests/test_costs.py` covers the cost arithmetic and who can see it, `tests/test_budget.py` covers the daily budget, and `tests/test_evals.py` covers the evaluation scoring and runner.
 
 The same suite runs on GitHub Actions on every push to `main` (see
 `.github/workflows/tests.yml`). Because nothing hits the network, CI needs only
@@ -128,7 +130,7 @@ Every response carries two fields that make this inspectable:
 
 | Field            | Meaning                                                                                                                                                                                    |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `execution_mode` | `agent` when the agent ran and persisted its work; `direct` when `AGENT_MODE=0` was set deliberately; `fallback_direct` when the agent failed and the single-call path rescued the request |
+| `execution_mode` | `agent` when the agent ran and persisted its work; `direct` when `AGENT_MODE=0` was set deliberately; `fallback_direct` when the agent failed and the single-call path rescued the request; `budget_direct` when the [daily budget](#daily-budget) had paused the agents |
 | `agent_trace`    | Ordered list of the tool calls the model chose, and what each returned                                                                                                                     |
 
 A trace from `POST /brand`:
@@ -177,6 +179,9 @@ free tier that adds up quickly while developing.
 | ------------- | ------------------------------------------------- | -------------------------------- |
 | `1` (default) | Runs the ReAct agents; `agent_trace` is populated | `agent`                          |
 | `0`           | One direct LLM call; `agent_trace` is empty       | `direct`                         |
+
+Past the daily budget's soft limit the agents pause whatever `AGENT_MODE` says,
+and responses report `budget_direct`.
 
 Endpoints, request bodies and response fields are identical either way, so the
 frontend does not care which mode is active. Restart the server after changing it.
@@ -311,6 +316,50 @@ should be added as a new version rather than an edit to an old one.
 
 ---
 
+## Prompt Evaluation
+
+Choosing between prompt versions by reading a few outputs is guesswork. The
+evaluation harness runs each version over the same fixed test cases and scores
+every post, so a new version can be compared with the current one before it
+goes live.
+
+```bash
+python -m evals.run_eval                     # every content version, all 8 cases
+python -m evals.run_eval --versions 4 5      # compare two versions
+python -m evals.run_eval --cases 3 --judge   # quick run, plus the predictor's score
+```
+
+**Test cases.** `evals/cases.json` holds eight fixed briefs: a brand profile and
+a topic each, across different people and fields. Several are phrased as
+personal experience ("what elderly patients taught me…"), which is where a
+model is most tempted to invent details. One topic contains a real figure, to
+check that numbers given in the topic are allowed through.
+
+**Scoring.** Each post starts at 100 and loses points for breaking a rule the
+content prompt itself states: em dashes, the banned AI-tell words, "not just X,
+it's Y", promotional openers, engagement bait, invented numbers, times or
+weekdays, a single block of text, flat sentence rhythm, too many emoji, and
+hashtag limits. The checks are plain Python in `evals/scoring.py`, so the same
+post always gets the same score and every lost point names its rule.
+`--judge` adds the engagement predictor's score as a second, model-based opinion.
+
+**Output.** A table per version with quality, lowest score, how many
+generations succeeded, words, tokens and cost per post, and how often each rule
+was broken. A failed generation counts as 0, because it delivers nothing; judged
+on its successes alone, a version that often fails would look better than a
+reliable one. The recommendation is the highest quality; versions within 2
+points of it count as a tie, and the cheaper one wins. Runs with fewer than five
+posts per version are flagged as a small sample. Results are written to `evals/results/latest.md` and
+`latest.json`, and the Streamlit dashboard shows them under Prompt Evaluation.
+
+**What it costs.** These are real Groq calls. Each one goes into the audit log
+tagged `EVAL content vN`, so it counts toward the daily budget and shows up in
+`/costs` separately from user traffic. All five versions over eight cases is 40
+calls. Production is never touched: each call names its prompt version, so the
+active version stays as it was.
+
+---
+
 ## Token Usage & Cost
 
 Each LLM call stores its token counts and cost in the audit log:
@@ -328,18 +377,32 @@ cost = uncached input × input price + cached input × input price × 0.5 + outp
 
 | Where | Shows |
 | --- | --- |
-| `GET /costs?days=30` | Totals, plus cost by agent, by endpoint (average per request) and by day |
+| `GET /costs?days=30` | Budget state, totals, plus cost by agent, by endpoint (average per request) and by day |
 | `GET /audit-logs` | Tokens, cost, request id and endpoint for each call |
-| Streamlit dashboard | Total spend, cost per action, agent-loop share, cost by agent and day, most expensive actions |
+| Streamlit dashboard | Today's spend against the budget, total spend, cost per action, agent-loop share, cost by agent and day, most expensive actions |
 
 Cost is saved when the call is made, so a later price change does not alter past
 figures. Groq's [console](https://console.groq.com) usage page is the billing record.
+
+### Daily budget
+
+`DAILY_BUDGET_USD` in `.env` caps what the app spends per day, midnight to midnight UTC:
+
+| Today's spend | What happens |
+| --- | --- |
+| Under 80% | Normal operation |
+| 80% or more | Agent loops pause. `/brand`, `/generate` and `/feedback` make one direct call instead and report `execution_mode: "budget_direct"` |
+| 100% or more | The five routes that call the model return 429 until midnight UTC. Dashboard, history, review and engagement keep working |
+
+Users see only "The daily AI usage limit has been reached"; amounts stay on the
+operator routes. The 80% mark is `BUDGET_SOFT_LIMIT_PERCENT`. Leave
+`DAILY_BUDGET_USD` empty to switch the guard off.
 
 ---
 
 ## API Endpoints
 
-Every endpoint except `/health` requires an `Authorization: Bearer <your-api-key>` header. The two operator routes, `/costs` and `/audit-logs`, take `ADMIN_API_KEY` instead.
+Every endpoint except `/health` requires an `Authorization: Bearer <your-api-key>` header. The two operator routes, `/costs` and `/audit-logs`, take `ADMIN_API_KEY` instead. With a [daily budget](#daily-budget) set, `/brand`, `/generate`, `/feedback`, `/predict` and `/orchestrate` return 429 once it is used up.
 
 | Method | Endpoint                                   | Description                                                | Rate limit |
 | ------ | ------------------------------------------ | ---------------------------------------------------------- | ---------- |
@@ -410,12 +473,18 @@ PersonaAI/
 │   ├── auth.py              # API key and admin key authentication
 │   ├── costs.py             # Token usage and cost per call
 │   ├── request_context.py   # Request id and endpoint for cost attribution
+│   ├── budget.py            # Daily spend limit: pauses agents, then LLM routes
 │   ├── security.py          # Security headers and request size limit
 │   ├── rate_limiter.py      # Request rate limiting
 │   └── observability.py     # Prometheus metrics + structured logging
 ├── static/                  # Frontend UI (6-tab dashboard)
-├── tests/                   # pytest suite (173 tests, no network required)
-├── streamlit_dashboard.py   # Observability and cost dashboard
+├── tests/                   # pytest suite (244 tests, no network required)
+├── evals/
+│   ├── cases.json           # Fixed test briefs for prompt evaluation
+│   ├── scoring.py           # Rule-based post scoring
+│   ├── run_eval.py          # Runs prompt versions and ranks them
+│   └── results/             # latest.md and latest.json from the last run
+├── streamlit_dashboard.py   # Observability, cost and evaluation dashboard
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
@@ -439,6 +508,17 @@ PersonaAI/
 | `ADMIN_API_KEY`     | Separate key for `/costs` and `/audit-logs`; must differ from `API_KEY` | No     | — (operator routes off)                       |
 | `LLM_INPUT_PRICE_PER_MILLION`  | Input price in USD per million tokens                      | No       | `0.15`                                        |
 | `LLM_OUTPUT_PRICE_PER_MILLION` | Output price in USD per million tokens                     | No       | `0.60`                                        |
+| `DAILY_BUDGET_USD`  | Daily spend limit in USD; empty switches the guard off                | No       | — (off)                                       |
+| `BUDGET_SOFT_LIMIT_PERCENT` | Share of the budget at which agents pause                     | No       | `80`                                          |
+| `LLM_MAX_TOKENS`    | Output cap per structured call, reasoning included                    | No       | `4096`                                        |
+| `LLM_REASONING_EFFORT` | `low`, `medium` or `high` reasoning for gpt-oss; empty uses Groq's default | No | — (Groq default)                     |
+
+gpt-oss is a reasoning model, and its hidden reasoning counts against
+`LLM_MAX_TOKENS` along with the visible answer. With a cap of 2048, the longer
+content prompts often spent the whole budget reasoning and returned nothing,
+which Groq reports as `json_validate_failed`. The default is 4096; on Groq's
+free tier the prompt plus this cap has to fit within 8K tokens per minute, so
+it is not set higher. A reply rejected as invalid JSON is retried once.
 
 The model name lives only in `.env` — never in the source — so a provider
 deprecation is a one-line config change. It is deliberately not auto-selected:
@@ -467,6 +547,7 @@ model per call, so past runs stay reproducible. Check
 Stated plainly, because they shape how the results should be read:
 
 - **Engagement prediction is unvalidated.** The scores come from the model's judgement, not a regression fitted to real LinkedIn data. Treat them as a structured second opinion, not a forecast. Validating them would require a labelled dataset of posts and their actual performance.
+- **Evaluation measures the prompt's rules, not readers.** The rule checks confirm a post follows the writing rules; they cannot tell whether people would engage with it. Some checks are heuristics (a list of three, an invented number) and can misfire on a legitimate sentence. One run of eight cases is a small sample, so use `--repeat` before reading much into a gap of a few points.
 - **No publishing integration.** Approved posts are stored, not published; you copy them to LinkedIn yourself. There is no LinkedIn API connection, which is also why approval is a manual step rather than a publish trigger.
 - **Engagement figures are entered by hand.** Nothing verifies that the numbers logged via `/engagement` match reality.
 - **Single-tenant auth.** One shared API key protects the whole instance. There are no user accounts, and any holder of the key can read every profile.
@@ -474,7 +555,7 @@ Stated plainly, because they shape how the results should be read:
 - **No HTTPS out of the box.** Serve it behind a TLS-terminating proxy before exposing it beyond your own machine.
 - **SQLite concurrency.** Fine for a single instance; a multi-worker deployment under write load should move to PostgreSQL.
 - **Agent reliability varies.** The model occasionally skips a tool call in a three-step chain. The fallback path covers this, but `execution_mode` is worth checking when a run looks unusual.
-- **Cost is computed, not billed.** Figures come from the token counts Groq returns, priced at the rates in `.env`. Groq's console remains the record of what was actually charged; if Groq changes its prices, update `.env` to match. An agent run that fails partway records the failure but not the tokens spent before it.
+- **Cost is computed, not billed.** Figures come from the token counts Groq returns, priced at the rates in `.env`. Groq's console remains the record of what was actually charged; if Groq changes its prices, update `.env` to match. An agent run that fails partway records the failure but not the tokens spent before it. The daily budget is checked before each request, so the one that crosses the limit still completes. A reply Groq rejects as invalid JSON returns no usage figures, so the tokens it consumed are not counted.
 - **Not deployed.** The project is containerized and runs locally or via `docker-compose`, but there is no hosted instance.
 
 ---

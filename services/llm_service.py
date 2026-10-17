@@ -32,6 +32,7 @@ client = OpenAI(
 )
 
 from utils.config import GROQ_MODEL as MODEL
+from utils.config import LLM_MAX_TOKENS, LLM_REASONING_EFFORT
 from utils.costs import Usage, usage_from_openai
 from utils.request_context import endpoint_var, request_id_var
 
@@ -142,6 +143,30 @@ def _active_prompt(db: Optional[Session], agent_name: str) -> tuple:
         session.close()
 
 
+def _prompt_version(db: Optional[Session], agent_name: str, version: int) -> tuple:
+    """One specific prompt version, active or not. Used by the evaluation harness
+    to compare versions without changing which one production uses."""
+    from database.models import PromptTemplate
+
+    def lookup(session):
+        row = (session.query(PromptTemplate)
+               .filter(PromptTemplate.agent_name == agent_name,
+                       PromptTemplate.version == version)
+               .first())
+        if row is None:
+            raise ValueError(f"No {agent_name} prompt version {version}")
+        return row.template, row.version
+
+    if db is not None:
+        return lookup(db)
+    from database.db import SessionLocal
+    session = SessionLocal()
+    try:
+        return lookup(session)
+    finally:
+        session.close()
+
+
 def _finish(db: Optional[Session], trace_id: str, agent_name: str, prompt_version: int,
             input_summary: str, text: str, start: float) -> dict:
     """Parse the model's reply and audit the call, whether parsing succeeds or not.
@@ -168,7 +193,14 @@ def _call_with_retry(prompt: str, trace_id: str = None) -> str:
         trace_id = str(uuid.uuid4())
     _last_usage.set(None)
 
-    for attempt in range(1, MAX_RETRIES + 1):
+    options = {}
+    if LLM_REASONING_EFFORT:
+        options["reasoning_effort"] = LLM_REASONING_EFFORT
+
+    json_retried = False
+    attempt = 0
+    while attempt < MAX_RETRIES:
+        attempt += 1
         try:
             response = client.chat.completions.create(
                 model=MODEL,
@@ -177,14 +209,24 @@ def _call_with_retry(prompt: str, trace_id: str = None) -> str:
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.7,
-                max_tokens=2048,
+                max_tokens=LLM_MAX_TOKENS,
                 response_format={"type": "json_object"},
+                **options,
             )
             _last_usage.set(usage_from_openai(getattr(response, "usage", None)))
             return response.choices[0].message.content
         except Exception as e:
             error_msg = str(e).lower()
-            if "429" in error_msg or "rate" in error_msg or "quota" in error_msg:
+            if "json_validate_failed" in error_msg and not json_retried:
+                # Groq rejected a reply that was not valid JSON, usually because
+                # the model ran out of output tokens. One fresh attempt usually
+                # succeeds; a second failure is reported as an error below.
+                json_retried = True
+                attempt -= 1
+                logger.warning("[%s] Model returned invalid JSON; retrying once.", trace_id)
+                continue
+            if ("429" in error_msg or "rate limit" in error_msg
+                    or "rate_limit" in error_msg or "quota" in error_msg):
                 delay = INITIAL_RETRY_DELAY * (2 ** (attempt - 1))
                 logger.warning(
                     "[%s] Rate limited (attempt %d/%d). Retrying in %ds…",
@@ -285,14 +327,19 @@ Return ONLY the JSON object, no extra text."""
                    f"name={name}, role={role}", text, start)
 
 
-def generate_linkedin_post(brand_profile: dict, topic: str, db: Session = None) -> dict:
-    """Generate a LinkedIn post aligned with the brand profile."""
+def generate_linkedin_post(brand_profile: dict, topic: str, db: Session = None,
+                           prompt_version: Optional[int] = None) -> dict:
+    """Generate a LinkedIn post aligned with the brand profile.
+
+    Uses the active content prompt unless `prompt_version` names a specific one.
+    """
     trace_id = str(uuid.uuid4())
     start = time.time()
 
-    prompt_version = 0
-    template = None
-    template, prompt_version = _active_prompt(db, "content")
+    if prompt_version is None:
+        template, prompt_version = _active_prompt(db, "content")
+    else:
+        template, prompt_version = _prompt_version(db, "content", prompt_version)
 
     if template:
         prompt = template.format(

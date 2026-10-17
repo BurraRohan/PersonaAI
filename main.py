@@ -39,6 +39,7 @@ from agents.content_agent import generate_post
 from agents.feedback_agent import get_feedback
 from agents.orchestrator import run_full_workflow
 from utils.auth import verify_admin_key, verify_api_key
+from utils.budget import budget_status, enforce_budget
 from utils.rate_limiter import limiter
 from utils.observability import setup_logging, setup_prometheus
 
@@ -843,7 +844,7 @@ def root():
 # ── Original Endpoints (with auth + rate limiting) ──────────────
 
 @app.post("/brand", response_model=BrandResponse, tags=["Brand Strategy"],
-          dependencies=[Depends(verify_api_key)])
+          dependencies=[Depends(verify_api_key), Depends(enforce_budget)])
 @limiter.limit("10/minute")
 def create_brand(request: Request, body: BrandRequest, db: Session = Depends(get_db)):
     """Create a structured brand profile using AI."""
@@ -851,7 +852,7 @@ def create_brand(request: Request, body: BrandRequest, db: Session = Depends(get
 
 
 @app.post("/generate", response_model=GenerateResponse, tags=["Content Generation"],
-          dependencies=[Depends(verify_api_key)])
+          dependencies=[Depends(verify_api_key), Depends(enforce_budget)])
 @limiter.limit("10/minute")
 def generate_content(request: Request, body: GenerateRequest, db: Session = Depends(get_db)):
     """Generate a LinkedIn post aligned with the stored brand profile."""
@@ -893,7 +894,7 @@ def log_engagement(request: Request, body: EngagementRequest, db: Session = Depe
 
 
 @app.post("/feedback", response_model=FeedbackResponse, tags=["Feedback"],
-          dependencies=[Depends(verify_api_key)])
+          dependencies=[Depends(verify_api_key), Depends(enforce_budget)])
 @limiter.limit("10/minute")
 def feedback(request: Request, body: FeedbackRequest, db: Session = Depends(get_db)):
     """Get AI-powered feedback based on engagement history."""
@@ -903,7 +904,7 @@ def feedback(request: Request, body: FeedbackRequest, db: Session = Depends(get_
 # ── Fix 2: LangGraph Orchestrated Endpoint ──────────────────────
 
 @app.post("/orchestrate", response_model=OrchestrateResponse, tags=["Orchestration"],
-          dependencies=[Depends(verify_api_key)])
+          dependencies=[Depends(verify_api_key), Depends(enforce_budget)])
 @limiter.limit("5/minute")
 def orchestrate(request: Request, body: OrchestrateRequest):
     """Run the full LangGraph orchestrated workflow: brand → content → feedback."""
@@ -1085,6 +1086,7 @@ def get_costs(
 
     return {
         "period_days": days,
+        "budget": budget_status(db),
         "pricing": {
             "model": GROQ_MODEL,
             "input_usd_per_million": INPUT_PRICE_PER_MILLION,
@@ -1167,11 +1169,16 @@ def get_post_history(user_id: PathID, request: Request, db: Session = Depends(ge
             "topic": post.topic,
             "content": post.content,
             "hashtags": hashtags,
+            "status": post.status,
             "likes": likes,
             "comments": comments,
             "shares": shares,
             "created_at": post.created_at.isoformat() if post.created_at else None,
         })
+
+    pending_count = sum(1 for p in posts if p.status == "pending")
+    approved_count = sum(1 for p in posts if p.status == "approved")
+    rejected_count = sum(1 for p in posts if p.status == "rejected")
 
     return {
         "user_id": user_id,
@@ -1189,7 +1196,7 @@ def get_post_history(user_id: PathID, request: Request, db: Session = Depends(ge
 # ── Engagement Predictor ────────────────────────────────────────────────
 
 @app.post("/predict", tags=["Predictor"], response_model=PredictResponse,
-          dependencies=[Depends(verify_api_key)])
+          dependencies=[Depends(verify_api_key), Depends(enforce_budget)])
 @limiter.limit("10/minute")
 def predict(request: Request, body: PredictRequest, db: Session = Depends(get_db)):
     """Predict engagement for a draft post before publishing."""

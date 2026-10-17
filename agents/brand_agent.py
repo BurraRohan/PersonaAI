@@ -18,6 +18,7 @@ from database.models import BrandProfile
 from schemas.schemas import BrandRequest, BrandResponse
 from services.llm_service import generate_brand_profile
 from utils.agent_runtime import build_agent_llm, run_agent, extract_trace, find_tool_result
+from utils.budget import agents_allowed
 from utils.config import AGENT_MODE
 
 logger = logging.getLogger(__name__)
@@ -193,11 +194,13 @@ def _to_response(profile: BrandProfile, trace: list, mode: str) -> BrandResponse
 
 def create_brand_profile(db: Session, request: BrandRequest) -> BrandResponse:
     """Create a brand profile by running the ReAct agent."""
-    if not AGENT_MODE:
-        # AGENT_MODE=0: one direct LLM call instead of the agent loop.
-        logger.info("AGENT_MODE=0 — direct path for %s", request.name)
+    if not AGENT_MODE or not agents_allowed():
+        # One direct LLM call instead of the agent loop: either AGENT_MODE=0,
+        # or today's spend has passed the budget's soft limit.
+        mode = "direct" if not AGENT_MODE else "budget_direct"
+        logger.info("%s path for %s", mode, request.name)
         profile = _create_profile_directly(db, request)
-        return _to_response(profile, [], "direct")
+        return _to_response(profile, [], mode)
 
     logger.info("Running brand agent for: %s", request.name)
 

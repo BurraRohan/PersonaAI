@@ -18,6 +18,7 @@ from database.models import BrandProfile, Post
 from schemas.schemas import FeedbackRequest, FeedbackResponse
 from services.llm_service import generate_feedback
 from utils.agent_runtime import build_agent_llm, run_agent, extract_trace, find_tool_result
+from utils.budget import agents_allowed
 from utils.config import AGENT_MODE
 
 logger = logging.getLogger(__name__)
@@ -178,15 +179,17 @@ def get_feedback(db: Session, request: FeedbackRequest) -> FeedbackResponse:
     history.sort(key=lambda h: h["created_at"] or "", reverse=True)
     brand_summary = f"{profile.name} – {profile.role} in {profile.industry}. Tone: {profile.tone}"
 
-    if not AGENT_MODE:
-        logger.info("AGENT_MODE=0 — direct path for user_id=%d", request.user_id)
+    if not AGENT_MODE or not agents_allowed():
+        # AGENT_MODE=0, or today's spend has passed the budget's soft limit.
+        mode = "direct" if not AGENT_MODE else "budget_direct"
+        logger.info("%s path for user_id=%d", mode, request.user_id)
         result = generate_feedback(history, brand_summary, db=db)
         return FeedbackResponse(
             user_id=request.user_id,
             total_posts=len(posts),
             performance_summary=result.get("performance_summary", ""),
             improvement_recommendation=result.get("improvement_recommendation", ""),
-            execution_mode="direct",
+            execution_mode=mode,
             agent_trace=[],
         )
 

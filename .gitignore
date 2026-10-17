@@ -44,3 +44,7 @@ Thumbs.db
 
 # ── Streamlit ────────────────────────────────────────────────
 .streamlit/secrets.toml
+
+# ── Prompt evaluation ────────────────────────────────────────
+# Each run writes a timestamped file; latest.json and latest.md are kept.
+evals/results/eval-*.json

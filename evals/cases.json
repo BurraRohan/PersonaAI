@@ -1,0 +1,98 @@
+[
+  {
+    "id": "data-streaming",
+    "profile": {
+      "name": "Karthik Menon",
+      "tone": "Practical and direct, with real examples from production work",
+      "content_themes": ["real-time data pipelines", "data reliability", "pragmatic architecture"],
+      "positioning_summary": "Data engineer at a fintech startup who writes about building pipelines that hold up in production.",
+      "do_guidelines": ["Explain trade-offs plainly", "Take a clear position"],
+      "dont_guidelines": ["Hype tools", "Use buzzwords"]
+    },
+    "topic": "Why we moved our fraud detection pipeline from batch to streaming"
+  },
+  {
+    "id": "kafka-startup",
+    "profile": {
+      "name": "Karthik Menon",
+      "tone": "Practical and direct, with real examples from production work",
+      "content_themes": ["real-time data pipelines", "data reliability", "pragmatic architecture"],
+      "positioning_summary": "Data engineer at a fintech startup who writes about building pipelines that hold up in production.",
+      "do_guidelines": ["Explain trade-offs plainly", "Take a clear position"],
+      "dont_guidelines": ["Hype tools", "Use buzzwords"]
+    },
+    "topic": "Is Kafka overkill for a startup with five engineers?"
+  },
+  {
+    "id": "elderly-buttons",
+    "profile": {
+      "name": "Meera Iyer",
+      "tone": "Warm and thoughtful, with stories from user research",
+      "content_themes": ["accessible design", "patient-facing apps", "user research"],
+      "positioning_summary": "Product designer in healthtech who turns research with patients into design decisions.",
+      "do_guidelines": ["Centre the patient", "Share what changed her mind"],
+      "dont_guidelines": ["Talk down to designers", "Use jargon"]
+    },
+    "topic": "What elderly patients taught me about button sizes"
+  },
+  {
+    "id": "booking-dropoff",
+    "profile": {
+      "name": "Meera Iyer",
+      "tone": "Warm and thoughtful, with stories from user research",
+      "content_themes": ["accessible design", "patient-facing apps", "user research"],
+      "positioning_summary": "Product designer in healthtech who turns research with patients into design decisions.",
+      "do_guidelines": ["Centre the patient", "Share what changed her mind"],
+      "dont_guidelines": ["Talk down to designers", "Use jargon"]
+    },
+    "topic": "Why our appointment booking flow had a 40% drop-off"
+  },
+  {
+    "id": "timestamp-ids",
+    "profile": {
+      "name": "Arjun Rao",
+      "tone": "Blunt, technical and slightly dry",
+      "content_themes": ["distributed systems", "backend correctness", "lessons from bugs"],
+      "positioning_summary": "Backend engineer who writes about the small design choices that cause big production problems.",
+      "do_guidelines": ["Admit mistakes", "Be specific about the reasoning"],
+      "dont_guidelines": ["Invent war stories", "Oversell"]
+    },
+    "topic": "Why I stopped using timestamps as IDs"
+  },
+  {
+    "id": "first-pull-request",
+    "profile": {
+      "name": "Priya Nair",
+      "tone": "Encouraging but honest, like a good mentor",
+      "content_themes": ["engineering management", "mentoring", "code review"],
+      "positioning_summary": "Engineering manager who writes about growing junior developers into confident engineers.",
+      "do_guidelines": ["Give concrete advice", "Be kind without being vague"],
+      "dont_guidelines": ["Lecture", "Use corporate language"]
+    },
+    "topic": "What I look for in a junior developer's first pull request"
+  },
+  {
+    "id": "iam-mistake",
+    "profile": {
+      "name": "Sana Sheikh",
+      "tone": "Calm, precise and a little wry",
+      "content_themes": ["cloud security", "least privilege", "startup security basics"],
+      "positioning_summary": "Cloud security engineer who helps startups fix the basics before they become breaches.",
+      "do_guidelines": ["Explain the risk in plain words", "Give one clear fix"],
+      "dont_guidelines": ["Use fear to sell", "Name and shame companies"]
+    },
+    "topic": "The one IAM mistake I see in almost every startup audit"
+  },
+  {
+    "id": "lost-customer",
+    "profile": {
+      "name": "Vikram Desai",
+      "tone": "Reflective and candid, founder to founder",
+      "content_themes": ["early-stage startups", "customer relationships", "edtech"],
+      "positioning_summary": "Founder of an edtech startup who writes openly about what early mistakes taught him.",
+      "do_guidelines": ["Own the mistake", "Share the lesson, not just the story"],
+      "dont_guidelines": ["Blame the customer", "Turn it into a sales pitch"]
+    },
+    "topic": "Lessons from losing our first big customer"
+  }
+]

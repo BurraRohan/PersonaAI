@@ -8,7 +8,11 @@ import os
 import streamlit as st
 import sqlite3
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone
+
+from dotenv import load_dotenv
+
+load_dotenv()  # DAILY_BUDGET_USD and the price settings live in .env
 
 st.set_page_config(page_title="PersonaAI Dashboard", layout="wide")
 st.title("PersonaAI – Observability Dashboard")
@@ -145,6 +149,34 @@ try:
                         f"{usage.loc[is_loop, 'cost_usd'].sum() / total_cost * 100:.0f}%"
                         if total_cost else "N/A")
 
+            # Daily budget, computed the same way as the API's guard: spend
+            # since midnight UTC against DAILY_BUDGET_USD.
+            try:
+                budget = float(os.getenv("DAILY_BUDGET_USD") or 0)
+            except ValueError:
+                budget = 0.0
+            try:
+                soft = min(100, max(1, int(os.getenv("BUDGET_SOFT_LIMIT_PERCENT", "80"))))
+            except ValueError:
+                soft = 80
+            if budget > 0:
+                midnight = datetime.now(timezone.utc).replace(
+                    hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+                today = usage.loc[usage["created_at"] >= midnight, "cost_usd"].sum()
+                used = today / budget * 100
+                if used >= 100:
+                    state = "Limit reached: AI generation is paused until midnight UTC."
+                elif used >= soft:
+                    state = f"Over {soft}%: agents paused, requests use the cheaper direct path."
+                else:
+                    state = "Within budget: agents running normally."
+                st.subheader("Today's Budget")
+                # "\\$" because Streamlit reads text between two $ signs as maths.
+                st.progress(min(used, 100) / 100,
+                            text=f"\\${today:.4f} of \\${budget:.4f} ({used:.0f}%) · {state}")
+            else:
+                st.caption("No daily budget set. Add DAILY_BUDGET_USD to .env to cap spend.")
+
             left, right = st.columns(2)
             with left:
                 st.subheader("Cost by Agent")
@@ -196,6 +228,62 @@ try:
                        "and are not included in these totals.")
     except Exception:
         st.info("Token usage columns not available yet. Restart the API once to add them.")
+
+    # ── Prompt Evaluation ───────────────────────────────────────
+    # Written by `python -m evals.run_eval`; this section only reads the file.
+
+    st.header("Prompt Evaluation")
+
+    eval_file = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "evals", "results", "latest.json")
+    try:
+        import json
+
+        with open(eval_file, encoding="utf-8") as f:
+            report = json.load(f)
+
+        st.caption(f"Run {report['run_id']} · model {report['model']} · "
+                   f"{report['cases']} test cases · run cost \\${report['total_cost_usd']:.4f}")
+        rec = report.get("recommendation") or {}
+        if rec.get("version") is not None:
+            st.success(f"Recommended: v{rec['version']}. " + rec["reason"].replace("$", "\\$"))
+
+        rows = [r for r in report["summary"] if r.get("posts")]
+        if rows:
+            table = pd.DataFrame([{
+                "version": f"v{r['version']}" + (" (active)" if r["version"] == report["active_version"] else ""),
+                "quality": r["quality"],
+                "lowest": r["quality_min"],
+                "succeeded": r.get("succeeded", ""),
+                **({"predictor": r.get("judge_mean")} if report.get("judge") else {}),
+                "words": r["words_mean"],
+                "tokens/post": r["tokens_per_post"],
+                "cost/post": r["cost_per_post_usd"],
+                "errors": r["errors"],
+            } for r in rows]).set_index("version")
+
+            left, right = st.columns(2)
+            with left:
+                st.subheader("Quality by Version")
+                st.bar_chart(table["quality"])
+            with right:
+                st.subheader("Cost per Post")
+                st.bar_chart(table["cost/post"])
+
+            st.dataframe(table.style.format({"cost/post": "${:.5f}", "tokens/post": "{:,.0f}"}),
+                         width="stretch")
+            st.caption("Quality is the mean rule-check score, with a failed generation counted as 0.")
+
+            with st.expander("Most common problems per version"):
+                for r in rows:
+                    rates = r.get("issue_rates") or {}
+                    top = ", ".join(f"{k.replace('_', ' ')} {int(v * 100)}%"
+                                    for k, v in list(rates.items())[:5]) or "none"
+                    st.markdown(f"**v{r['version']}**: {top}")
+    except FileNotFoundError:
+        st.info("No evaluation yet. Run `python -m evals.run_eval` to compare prompt versions.")
+    except Exception as e:
+        st.warning(f"Could not read the evaluation results: {e}")
 
     # ── Prompt Versions ─────────────────────────────────────────
 

@@ -17,6 +17,7 @@ from database.models import BrandProfile, Post
 from schemas.schemas import GenerateRequest, GenerateResponse
 from services.llm_service import generate_linkedin_post
 from utils.agent_runtime import build_agent_llm, run_agent, extract_trace, find_tool_result
+from utils.budget import agents_allowed
 from utils.config import AGENT_MODE
 
 logger = logging.getLogger(__name__)
@@ -189,10 +190,12 @@ def generate_post(db: Session, request: GenerateRequest) -> GenerateResponse:
             detail="Brand profile not found. Create one via POST /brand first.",
         )
 
-    if not AGENT_MODE:
-        logger.info("AGENT_MODE=0 — direct path for user_id=%d", request.user_id)
+    if not AGENT_MODE or not agents_allowed():
+        # AGENT_MODE=0, or today's spend has passed the budget's soft limit.
+        mode = "direct" if not AGENT_MODE else "budget_direct"
+        logger.info("%s path for user_id=%d", mode, request.user_id)
         post = _generate_post_directly(db, request)
-        return _to_response(post, [], "direct")
+        return _to_response(post, [], mode)
 
     logger.info("Running content agent for user_id=%d", request.user_id)
 
