@@ -12,7 +12,7 @@ import logging
 
 from sqlalchemy.orm import Session
 from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 from database.models import BrandProfile
 from schemas.schemas import BrandRequest, BrandResponse
@@ -25,115 +25,118 @@ logger = logging.getLogger(__name__)
 
 # ── Tools ───────────────────────────────────────────────────────
 
-@tool
-def check_existing_profile(name: str) -> str:
-    """Check whether a brand profile already exists for the given person's name.
+def build_brand_tools(request: BrandRequest) -> list:
+    """Return the brand agent's tools, bound to one validated request.
 
-    Returns JSON with "exists": true/false, plus the profile id and role if found.
+    The person's details come from the request, never from the model. If the
+    model retyped them into tool arguments, one slipped character in a name
+    would go straight into the saved strategy. The generated strategy is also
+    held here between tools instead of being copied through the model, which
+    keeps it intact and spends fewer output tokens.
     """
-    from database.db import SessionLocal
-    db = SessionLocal()
-    try:
-        profile = (
-            db.query(BrandProfile)
-            .filter(BrandProfile.name == name)
-            .order_by(BrandProfile.id.desc())
-            .first()
-        )
-        if profile:
-            return json.dumps({
-                "exists": True,
-                "id": profile.id,
-                "name": profile.name,
-                "role": profile.role,
-                "tone": profile.tone,
-            })
-        return json.dumps({"exists": False})
-    finally:
-        db.close()
+    details = {
+        "name": request.name,
+        "role": request.role,
+        "industry": request.industry,
+        "goals": request.goals,
+        "preferred_tone": request.preferred_tone,
+    }
+    state: dict = {}
 
+    @tool
+    def check_existing_profile() -> str:
+        """Check whether a brand profile already exists for this person.
 
-@tool
-def generate_brand_strategy(
-    name: str, role: str, industry: str, goals: str, preferred_tone: str
-) -> str:
-    """Generate a LinkedIn brand strategy for a professional.
+        Returns JSON with "exists": true/false, plus the profile id and role if found.
+        """
+        from database.db import SessionLocal
+        db = SessionLocal()
+        try:
+            profile = (
+                db.query(BrandProfile)
+                .filter(BrandProfile.name == details["name"])
+                .order_by(BrandProfile.id.desc())
+                .first()
+            )
+            if profile:
+                return json.dumps({
+                    "exists": True,
+                    "id": profile.id,
+                    "name": profile.name,
+                    "role": profile.role,
+                    "tone": profile.tone,
+                })
+            return json.dumps({"exists": False})
+        finally:
+            db.close()
 
-    Returns JSON containing tone, content_themes, positioning_summary,
-    do_guidelines and dont_guidelines. Pass this JSON straight to
-    save_brand_profile as the strategy_json argument.
-    """
-    result = generate_brand_profile(
-        name=name,
-        role=role,
-        industry=industry,
-        goals=goals,
-        preferred_tone=preferred_tone,
-    )
-    return json.dumps(result)
+    @tool
+    def generate_brand_strategy() -> str:
+        """Generate a LinkedIn brand strategy for this person.
 
+        Returns JSON containing tone, content_themes, positioning_summary,
+        do_guidelines and dont_guidelines. The strategy is kept for
+        save_brand_profile, so there is nothing to pass on.
+        """
+        state["strategy"] = generate_brand_profile(**details)
+        return json.dumps(state["strategy"])
 
-@tool
-def save_brand_profile(
-    name: str, role: str, industry: str, goals: str,
-    preferred_tone: str, strategy_json: str,
-) -> str:
-    """Persist a brand profile to the database.
+    @tool
+    def save_brand_profile() -> str:
+        """Save this person's brand profile with the strategy just generated.
 
-    strategy_json must be the JSON string returned by generate_brand_strategy.
-    Returns JSON containing the new profile "id".
-    """
-    from database.db import SessionLocal
+        Call generate_brand_strategy first. Returns JSON containing the new
+        profile "id".
+        """
+        if "saved_id" in state:
+            # A repeated save must not create a duplicate profile.
+            return json.dumps({"id": state["saved_id"], "status": "saved"})
+        strategy = state.get("strategy")
+        if not strategy:
+            return json.dumps({"error": "No strategy yet. Call generate_brand_strategy first."})
 
-    try:
-        strategy = json.loads(strategy_json)
-    except json.JSONDecodeError:
-        return json.dumps({"error": "strategy_json was not valid JSON"})
+        from database.db import SessionLocal
+        db = SessionLocal()
+        try:
+            profile = BrandProfile(
+                **details,
+                tone=strategy.get("tone", ""),
+                content_themes=json.dumps(strategy.get("content_themes", [])),
+                positioning_summary=strategy.get("positioning_summary", ""),
+                do_guidelines=json.dumps(strategy.get("do_guidelines", [])),
+                dont_guidelines=json.dumps(strategy.get("dont_guidelines", [])),
+            )
+            db.add(profile)
+            db.commit()
+            db.refresh(profile)
+            state["saved_id"] = profile.id
+            return json.dumps({"id": profile.id, "status": "saved"})
+        finally:
+            db.close()
 
-    db = SessionLocal()
-    try:
-        profile = BrandProfile(
-            name=name,
-            role=role,
-            industry=industry,
-            goals=goals,
-            preferred_tone=preferred_tone,
-            tone=strategy.get("tone", ""),
-            content_themes=json.dumps(strategy.get("content_themes", [])),
-            positioning_summary=strategy.get("positioning_summary", ""),
-            do_guidelines=json.dumps(strategy.get("do_guidelines", [])),
-            dont_guidelines=json.dumps(strategy.get("dont_guidelines", [])),
-        )
-        db.add(profile)
-        db.commit()
-        db.refresh(profile)
-        return json.dumps({"id": profile.id, "status": "saved"})
-    finally:
-        db.close()
+    return [check_existing_profile, generate_brand_strategy, save_brand_profile]
 
-
-BRAND_AGENT_TOOLS = [check_existing_profile, generate_brand_strategy, save_brand_profile]
 
 BRAND_AGENT_PROMPT = """You are a personal-branding strategist agent.
 
-Your job is to create a structured LinkedIn brand profile. Work through these
-steps, calling one tool at a time:
+Your job is to create a structured LinkedIn brand profile. The person's details
+are already attached to your tools, so the tools take no arguments. Work
+through these steps, calling one tool at a time:
 
-1. Call check_existing_profile with the person's name.
-2. Call generate_brand_strategy with all five details about the person.
-3. Call save_brand_profile, passing the same five details plus the exact JSON
-   string returned by generate_brand_strategy as strategy_json.
+1. Call check_existing_profile.
+2. Call generate_brand_strategy.
+3. Call save_brand_profile.
 4. Reply with a one-sentence confirmation that includes the saved profile id.
 
 Do not skip the save step. Do not invent a profile id."""
 
 
-def get_brand_agent():
-    """Build the compiled ReAct brand agent."""
-    return create_react_agent(
+def get_brand_agent(request: BrandRequest):
+    """Build the compiled ReAct brand agent for one request."""
+    return create_agent(
         build_agent_llm(),
-        BRAND_AGENT_TOOLS,
-        prompt=BRAND_AGENT_PROMPT,
+        build_brand_tools(request),
+        system_prompt=BRAND_AGENT_PROMPT,
     )
 
 
@@ -209,7 +212,7 @@ def create_brand_profile(db: Session, request: BrandRequest) -> BrandResponse:
 
     trace: list = []
     try:
-        messages = run_agent(get_brand_agent(), instruction, "brand")
+        messages = run_agent(get_brand_agent(request), instruction, "brand")
         trace = extract_trace(messages)
         profile_id = find_tool_result(messages, "save_brand_profile", "id")
 

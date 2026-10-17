@@ -1,7 +1,7 @@
 """
 Agent runtime helpers.
 
-The ReAct agents built with `create_react_agent` return a message list.
+The ReAct agents built with LangChain's `create_agent` return a message list.
 These helpers:
   * build the LLM used by every agent,
   * run an agent and capture which tools it decided to call,

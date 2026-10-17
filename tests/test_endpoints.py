@@ -94,12 +94,11 @@ class TestBrandEndpoint:
                 self.content = content
 
         def fake_run(agent, instruction, *args):
-            # The save tool writes a real row, exactly as the live agent would.
-            saved = ba.save_brand_profile.invoke({
-                "name": "Ada Lovelace", "role": "ML Engineer", "industry": "AI/ML",
-                "goals": "Thought leadership", "preferred_tone": "Direct",
-                "strategy_json": json.dumps(FAKE_STRATEGY),
-            })
+            # The real tools generate and save a row, exactly as the live agent would.
+            from schemas.schemas import BrandRequest
+            tools = {t.name: t for t in ba.build_brand_tools(BrandRequest(**self._payload()))}
+            tools["generate_brand_strategy"].invoke({})
+            saved = tools["save_brand_profile"].invoke({})
             return [
                 FakeAI(),
                 FakeTool("check_existing_profile", '{"exists": false}'),
@@ -109,7 +108,7 @@ class TestBrandEndpoint:
         # Force agent mode on: this test must not depend on the developer's .env.
         monkeypatch.setattr(ba, "AGENT_MODE", True)
         monkeypatch.setattr(ba, "run_agent", fake_run)
-        monkeypatch.setattr(ba, "get_brand_agent", lambda: object())
+        monkeypatch.setattr(ba, "get_brand_agent", lambda *a: object())
 
         res = client.post("/brand", json=self._payload(), headers=AUTH)
         assert res.status_code == 200
@@ -129,7 +128,7 @@ class TestBrandEndpoint:
 
         monkeypatch.setattr(ba, "AGENT_MODE", True)
         monkeypatch.setattr(ba, "run_agent", boom)
-        monkeypatch.setattr(ba, "get_brand_agent", lambda: object())
+        monkeypatch.setattr(ba, "get_brand_agent", lambda *a: object())
 
         res = client.post("/brand", json=self._payload(), headers=AUTH)
         assert res.status_code == 200

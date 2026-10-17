@@ -67,6 +67,13 @@ class TestAgentToolsAreScoped:
             assert "user_id" not in t.args
             assert "topic" not in t.args
 
+    def test_brand_tools_take_no_personal_details(self, client):
+        from agents.brand_agent import build_brand_tools
+        from schemas.schemas import BrandRequest
+        req = BrandRequest(name="A", role="r", industry="i", goals="g", preferred_tone="t")
+        for t in build_brand_tools(req):
+            assert t.args == {}
+
     def test_feedback_tools_take_no_profile_argument(self, client):
         from agents.feedback_agent import build_feedback_tools
         for t in build_feedback_tools(1, "summary"):
@@ -269,7 +276,7 @@ class TestNoInternalDetailsLeak:
             raise RuntimeError("connection to 10.0.0.5:5432 refused, password=hunter2")
 
         monkeypatch.setattr(ba, "AGENT_MODE", True)
-        monkeypatch.setattr(ba, "get_brand_agent", lambda: object())
+        monkeypatch.setattr(ba, "get_brand_agent", lambda *a: object())
         monkeypatch.setattr(ba, "run_agent", boom)
         body = client.post("/brand", json={"name": "A", "role": "r", "industry": "i",
                                            "goals": "g", "preferred_tone": "t"},

@@ -11,7 +11,7 @@ import logging
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from langchain_core.tools import tool
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 from database.models import BrandProfile, Post
 from schemas.schemas import GenerateRequest, GenerateResponse
@@ -134,10 +134,10 @@ the post, but mention the overlap in your final reply."""
 
 def get_content_agent(user_id: int, topic: str):
     """Build the compiled ReAct content agent for one profile and topic."""
-    return create_react_agent(
+    return create_agent(
         build_agent_llm(),
         build_content_tools(user_id, topic),
-        prompt=CONTENT_AGENT_PROMPT,
+        system_prompt=CONTENT_AGENT_PROMPT,
     )
 
 
