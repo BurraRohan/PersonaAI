@@ -237,6 +237,33 @@ class TestRunner:
         assert rec["version"] == 5
         assert "Small sample" in rec["reason"]
 
+    def test_a_negligible_cost_gap_does_not_beat_a_higher_score(self, harness):
+        """A real full run: v4 96.8 at $0.00170, v5 97 at $0.00171. A
+        hundredth of a cent per post is noise; the higher score should win."""
+        run_eval, _, _ = harness
+        summary = [
+            {"version": 4, "posts": 8, "errors": 0, "quality": 96.8, "cost_per_post_usd": 0.00170},
+            {"version": 5, "posts": 8, "errors": 0, "quality": 97.0, "cost_per_post_usd": 0.00171},
+        ]
+        rec = run_eval.recommend(summary, active=1)
+        assert rec["version"] == 5
+        assert "cost more" not in rec["reason"]
+
+    def test_rescore_rebuilds_the_report_without_calls(self, harness, monkeypatch):
+        run_eval, cases, out = harness
+        run_eval.run([90, 91], cases, results_dir=out, progress=lambda m: None)
+        saved = json.loads((out / "latest.json").read_text(encoding="utf-8"))
+        saved["recommendation"] = {"version": 91, "reason": "stale"}
+        (out / "latest.json").write_text(json.dumps(saved), encoding="utf-8")
+
+        import services.llm_service as llm
+        monkeypatch.setattr(llm, "client", None)  # any Groq call would now fail
+        assert run_eval.rescore(out) == 0
+        rebuilt = json.loads((out / "latest.json").read_text(encoding="utf-8"))
+        assert rebuilt["recommendation"]["version"] == 90
+        assert rebuilt["items"] == saved["items"]
+        assert "Recommendation: v90" in (out / "latest.md").read_text(encoding="utf-8")
+
     def test_unknown_version_is_rejected(self, harness):
         run_eval, _, _ = harness
         assert run_eval.main(["--versions", "999"]) == 2

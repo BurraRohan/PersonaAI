@@ -243,13 +243,17 @@ def summarise(items: list, versions: list, judge: bool) -> list:
 
 
 SMALL_SAMPLE = 5
+# Costs within this share of the cheapest count as equal. A difference of a
+# hundredth of a cent per post is noise, not a saving worth losing points for.
+COST_TOLERANCE = 0.05
 
 
 def recommend(summary: list, active: Optional[int]) -> dict:
     """Highest quality wins, with failed generations counted as 0.
 
     Versions within 2 points of the best count as a tie, and the cheaper one
-    wins. On a full tie the active version is kept, since switching gains
+    wins. Costs within 5% of each other count as equal, and then the higher
+    score wins. On a full tie the active version is kept, since switching gains
     nothing.
     """
     scored = [r for r in summary if r.get("posts")]
@@ -257,8 +261,10 @@ def recommend(summary: list, active: Optional[int]) -> dict:
         return {"version": None, "reason": "No version produced a usable post."}
     top = max(r["quality"] for r in scored)
     contenders = [r for r in scored if r["quality"] >= top - 2]
-    best = min(contenders, key=lambda r: (r["cost_per_post_usd"], -r["quality"],
-                                          r["version"] != active))
+    cheapest = min(r["cost_per_post_usd"] for r in contenders)
+    affordable = [r for r in contenders
+                  if r["cost_per_post_usd"] <= cheapest * (1 + COST_TOLERANCE)]
+    best = max(affordable, key=lambda r: (r["quality"], r["version"] == active))
 
     reason = (f"v{best['version']} scored {best['quality']} at "
               f"${best['cost_per_post_usd']:.5f} per post")
@@ -266,10 +272,12 @@ def recommend(summary: list, active: Optional[int]) -> dict:
                else ", with no failures.")
     others = [r for r in contenders if r is not best]
     if others:
-        if any(r["cost_per_post_usd"] > best["cost_per_post_usd"] for r in others):
+        pricier = [r for r in others if r not in affordable]
+        if pricier:
             reason += " Other versions within 2 points cost more."
         else:
-            reason += " Other versions scored within 2 points at the same cost."
+            reason += (" Other versions scored within 2 points at about the same cost;"
+                       " the higher score wins.")
     if active is not None and best["version"] != active:
         current = next((r for r in scored if r["version"] == active), None)
         if current:
@@ -390,6 +398,28 @@ class _RateLimitNotice(logging.Filter):
         return record.levelno >= logging.WARNING
 
 
+def rescore(results_dir: Path = None) -> int:
+    """Recompute summary and recommendation from latest.json. No Groq calls.
+
+    The saved per-post results are the evidence; the summary is derived from
+    them. When the ranking rules change, this rebuilds the report without
+    paying for the generations again.
+    """
+    results_dir = Path(results_dir or RESULTS_DIR)
+    latest = results_dir / "latest.json"
+    if not latest.exists():
+        print(f"No saved results at {latest}. Run an evaluation first.")
+        return 2
+    report = json.loads(latest.read_text(encoding="utf-8"))
+    report["summary"] = summarise(report["items"], report["versions"], report["judge"])
+    report["recommendation"] = recommend(report["summary"], report["active_version"])
+    body = json.dumps(report, indent=2, ensure_ascii=False)
+    latest.write_text(body, encoding="utf-8")
+    (results_dir / "latest.md").write_text(render_markdown(report), encoding="utf-8")
+    print_summary(report)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="Compare content prompt versions.")
     parser.add_argument("--versions", type=int, nargs="+",
@@ -401,7 +431,13 @@ def main(argv=None) -> int:
                         help="Also score each post with the engagement predictor")
     parser.add_argument("--ignore-budget", action="store_true",
                         help="Run even if the daily budget is used up")
+    parser.add_argument("--rescore", action="store_true",
+                        help="Rebuild the summary and report from the last run's saved "
+                             "results, with no Groq calls")
     args = parser.parse_args(argv)
+
+    if args.rescore:
+        return rescore()
 
     _quiet_logs()
     prepare_database()
