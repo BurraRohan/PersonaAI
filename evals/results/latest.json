@@ -3,7 +3,7 @@
   "started_at": "2026-10-18T06:53:00.506223+00:00",
   "finished_at": "2026-10-18T07:05:16.800397+00:00",
   "model": "openai/gpt-oss-120b",
-  "active_version": 1,
+  "active_version": 5,
   "versions": [
     1,
     2,
@@ -1290,6 +1290,6 @@
   "total_cost_usd": 0.045752,
   "recommendation": {
     "version": 5,
-    "reason": "v5 scored 97 at $0.00171 per post, with no failures. Other versions scored within 2 points at about the same cost; the higher score wins. The active version, v1, scored 38.2 at $0.00076."
+    "reason": "v5 scored 97 at $0.00171 per post, with no failures. Other versions scored within 2 points at about the same cost; the higher score wins. It is already the active version."
   }
 }

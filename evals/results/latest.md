@@ -2,15 +2,15 @@
 
 Run 20261018-065300 · model `openai/gpt-oss-120b` · 8 cases · total cost $0.0458
 
-**Recommendation: v5.** v5 scored 97 at $0.00171 per post, with no failures. Other versions scored within 2 points at about the same cost; the higher score wins. The active version, v1, scored 38.2 at $0.00076.
+**Recommendation: v5.** v5 scored 97 at $0.00171 per post, with no failures. Other versions scored within 2 points at about the same cost; the higher score wins. It is already the active version.
 
 | Version | Quality | Lowest | Spread | Succeeded | Words | Tokens/post | Cost/post |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| v1 (active) | 38.2 | 6 | 18.9 | 8/8 | 188 | 1496 | $0.00076 |
+| v1 | 38.2 | 6 | 18.9 | 8/8 | 188 | 1496 | $0.00076 |
 | v2 | 63.1 | 28 | 15.7 | 8/8 | 140 | 1827 | $0.00071 |
 | v3 | 81.2 | 73 | 5.4 | 8/8 | 144 | 2397 | $0.00085 |
 | v4 | 96.8 | 89 | 4.5 | 8/8 | 154 | 3811 | $0.00170 |
-| v5 | 97 | 92 | 2.4 | 8/8 | 161 | 4066 | $0.00171 |
+| v5 (active) | 97 | 92 | 2.4 | 8/8 | 161 | 4066 | $0.00171 |
 
 Quality is the mean rule-check score with failed generations counted as 0.
 
