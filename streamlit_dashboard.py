@@ -149,6 +149,20 @@ try:
                         f"{usage.loc[is_loop, 'cost_usd'].sum() / total_cost * 100:.0f}%"
                         if total_cost else "N/A")
 
+            # Prediction cache: repeat scores answered without a Groq call.
+            try:
+                cache = pd.read_sql(
+                    "SELECT COUNT(*) AS entries, COALESCE(SUM(hit_count), 0) AS hits, "
+                    "COALESCE(SUM(hit_count * cost_usd), 0) AS saved FROM prediction_cache",
+                    conn).iloc[0]
+                if cache["hits"]:
+                    st.caption(f"Prediction cache: {int(cache['hits'])} repeat score(s) answered "
+                               f"without calling Groq, saving \\${float(cache['saved']):.4f}.")
+                else:
+                    st.caption("Prediction cache: no repeat scores yet.")
+            except Exception:
+                pass  # table appears once the API has started with this version
+
             # Daily budget, computed the same way as the API's guard: spend
             # since midnight UTC against DAILY_BUDGET_USD.
             try:

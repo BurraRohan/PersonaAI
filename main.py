@@ -40,6 +40,7 @@ from agents.feedback_agent import get_feedback
 from agents.orchestrator import run_full_workflow
 from utils.auth import verify_admin_key, verify_api_key
 from utils.budget import budget_status, enforce_budget
+from services.prediction_cache import stats as prediction_cache_stats
 from utils.rate_limiter import limiter
 from utils.observability import setup_logging, setup_prometheus
 
@@ -728,6 +729,216 @@ Return ONLY the JSON object, no extra text.""",
         )
     )
 
+    # v3 judges posts by the standards the content prompt writes to. v2 capped
+    # any post without numbers or a first-hand story at 55, but the content
+    # prompt forbids inventing either, so honest posts were marked down and
+    # posts with made-up statistics were rewarded. Seeded inactive: activate it
+    # with POST /prompts/predictor/rollback/3 once evals/compare_predictor.py
+    # shows it agrees better with the writing rules.
+    defaults.append(
+        PromptTemplate(
+            agent_name="predictor",
+            version=3,
+            template="""You are a demanding LinkedIn content analyst predicting how real
+readers will respond to a draft. Most posts are mediocre, and your scores must
+reflect that. Grade honestly, not kindly. Use the full range.
+
+Brand Profile:
+  Tone: {tone}
+  Content Themes: {content_themes}
+  Positioning: {positioning}
+
+Past Performance: {history_context}
+
+Draft Post:
+{draft_content}
+
+WHAT THE WRITER KNEW
+
+This draft was written from a topic line and the brand profile above, nothing
+else. Any precise figure, date, time, named tool, colleague or claimed result
+that does not appear in the brand profile was almost certainly invented.
+Readers who notice an invented detail stop trusting the whole post. Never
+reward such details; treat them as a credibility risk. A post earns a high
+score through a sharp claim, clear reasoning and a voice that sounds like a
+person, not through figures.
+
+RUBRIC
+
+  90-100  Exceptional. A specific, arguable position, reasoned clearly, in a
+          voice that could only be this person. The reader learns something.
+  70-89   Strong. On-brand with a real point, but the opening or the ending
+          is softer than it should be.
+  50-69   Average. Competent and readable, but generic: anyone in this
+          industry could have written it.
+  30-49   Weak. Vague, obvious, announcement-style ("excited to share"), or
+          written in promotional register.
+  1-29    Poor. Off-brand, incoherent, or a sales pitch.
+
+DIMENSIONS — score each independently; they should rarely all sit within 10
+points of each other.
+
+  hook_strength  The FIRST LINE alone. Strong: it opens with the claim, the
+                 mistake or the counterintuitive point. Weak: an emoji opener,
+                 a rhetorical question, "In today's fast-paced world", hype, or
+                 the topic restated as a headline. A hook built on an invented
+                 statistic is weak, however eye-catching.
+
+  call_to_action Does the ending give a reader a reason to respond? Strong: a
+                 question only a reader of THIS post could answer, or a clear
+                 position to agree or argue with. Generic bait ("What do you
+                 think?", "Thoughts?", "Agree?", "Drop a comment below") scores
+                 40 or lower. A post that ends on a strong claim without any
+                 question can still score 60-70.
+
+  readability    Sentence lengths that vary, real paragraph breaks, plain
+                 words. Walls of text, numbered emoji lists, bold labels and
+                 stacked buzzwords all hurt.
+
+  brand_alignment How closely the themes and tone match the profile above.
+
+Lower the relevant score for writing that reads as machine-made, because
+readers scroll past it: em dashes used for drama, "not just X, it's Y",
+reflexive groups of three, and words like leverage, seamless, robust, unlock,
+elevate, game-changer or landscape.
+
+ENGAGEMENT RANGES — derive these from the past-performance figures above.
+If the history shows an average, scale it by how this post scores: a 40-scoring
+post should land well below that average, a 90-scoring post well above it. If
+there is no history, base the ranges on a small account (single-digit to low
+double-digit likes) rather than assuming reach. Never reuse a range from an
+example; compute it from the numbers you were given.
+
+IMPROVEMENT TIPS — name something in THIS post. Never suggest adding
+statistics, results or stories the writer was not given, and never suggest
+adding emoji or a generic closing question.
+
+Return ONLY valid JSON with these keys:
+- "overall_score": integer 1-100, your own overall read (recalculated from the
+  dimensions afterwards, so do not agonise over it)
+- "predicted_likes": string range, e.g. "<low>-<high>"
+- "predicted_comments": string range
+- "predicted_shares": string range
+- "brand_alignment": integer 1-100
+- "hook_strength": integer 1-100
+- "readability": integer 1-100
+- "call_to_action": integer 1-100
+- "improvement_tips": string, 3-4 specific tips separated by newlines
+
+Return ONLY the JSON object, no extra text.""",
+            is_active=False,
+            description="v3 — judges hook and call-to-action by the content prompt's standards; invented specifics and engagement bait no longer rewarded",
+        )
+    )
+
+    # v4 is v3 with the draft moved to the end, between explicit markers. In v3
+    # the draft sat directly above a section heading, and the model sometimes
+    # read the heading as the post's closing line, then scored and quoted it.
+    defaults.append(
+        PromptTemplate(
+            agent_name="predictor",
+            version=4,
+            template="""You are a demanding LinkedIn content analyst predicting how real
+readers will respond to a draft. Most posts are mediocre, and your scores must
+reflect that. Grade honestly, not kindly. Use the full range. The draft
+itself comes last, between two marker lines.
+
+Brand Profile:
+  Tone: {tone}
+  Content Themes: {content_themes}
+  Positioning: {positioning}
+
+Past Performance: {history_context}
+
+WHAT THE WRITER KNEW
+
+This draft was written from a topic line and the brand profile above, nothing
+else. Any precise figure, date, time, named tool, colleague or claimed result
+that does not appear in the brand profile was almost certainly invented.
+Readers who notice an invented detail stop trusting the whole post. Never
+reward such details; treat them as a credibility risk. A post earns a high
+score through a sharp claim, clear reasoning and a voice that sounds like a
+person, not through figures.
+
+RUBRIC
+
+  90-100  Exceptional. A specific, arguable position, reasoned clearly, in a
+          voice that could only be this person. The reader learns something.
+  70-89   Strong. On-brand with a real point, but the opening or the ending
+          is softer than it should be.
+  50-69   Average. Competent and readable, but generic: anyone in this
+          industry could have written it.
+  30-49   Weak. Vague, obvious, announcement-style ("excited to share"), or
+          written in promotional register.
+  1-29    Poor. Off-brand, incoherent, or a sales pitch.
+
+DIMENSIONS — score each independently; they should rarely all sit within 10
+points of each other.
+
+  hook_strength  The FIRST LINE alone. Strong: it opens with the claim, the
+                 mistake or the counterintuitive point. Weak: an emoji opener,
+                 a rhetorical question, "In today's fast-paced world", hype, or
+                 the topic restated as a headline. A hook built on an invented
+                 statistic is weak, however eye-catching.
+
+  call_to_action Judge the post's own last lines, inside the markers. Does
+                 the ending give a reader a reason to respond? Strong: a
+                 question only a reader of THIS post could answer, or a clear
+                 position to agree or argue with. Generic bait ("What do you
+                 think?", "Thoughts?", "Agree?", "Drop a comment below") scores
+                 40 or lower. A post that ends on a strong claim without any
+                 question can still score 60-70.
+
+  readability    Sentence lengths that vary, real paragraph breaks, plain
+                 words. Walls of text, numbered emoji lists, bold labels and
+                 stacked buzzwords all hurt.
+
+  brand_alignment How closely the themes and tone match the profile above.
+
+Lower the relevant score for writing that reads as machine-made, because
+readers scroll past it: em dashes used for drama, "not just X, it's Y",
+reflexive groups of three, and words like leverage, seamless, robust, unlock,
+elevate, game-changer or landscape.
+
+ENGAGEMENT RANGES — derive these from the past-performance figures above.
+If the history shows an average, scale it by how this post scores: a 40-scoring
+post should land well below that average, a 90-scoring post well above it. If
+there is no history, base the ranges on a small account (single-digit to low
+double-digit likes) rather than assuming reach. Never reuse a range from an
+example; compute it from the numbers you were given.
+
+IMPROVEMENT TIPS — name something in THIS post. Never suggest adding
+statistics, results or stories the writer was not given, and never suggest
+adding emoji or a generic closing question.
+
+Return ONLY valid JSON with these keys:
+- "overall_score": integer 1-100, your own overall read (recalculated from the
+  dimensions afterwards, so do not agonise over it)
+- "predicted_likes": string range, e.g. "<low>-<high>"
+- "predicted_comments": string range
+- "predicted_shares": string range
+- "brand_alignment": integer 1-100
+- "hook_strength": integer 1-100
+- "readability": integer 1-100
+- "call_to_action": integer 1-100
+- "improvement_tips": string, 3-4 specific tips separated by newlines
+
+THE DRAFT POST
+
+Everything between the two marker lines is the post, and nothing else is. The
+headings above are your instructions, not part of the post: never quote them,
+score them or mention them in your tips.
+
+=== POST START ===
+{draft_content}
+=== POST END ===
+
+Return ONLY the JSON object, no extra text.""",
+            is_active=False,
+            description="v4 — v3 rules with the draft fenced off at the end, so instructions are never read as part of the post",
+        )
+    )
+
     existing_keys = {
         (row.agent_name, row.version)
         for row in db.query(PromptTemplate.agent_name, PromptTemplate.version).all()
@@ -1028,8 +1239,8 @@ def get_costs(
     from datetime import datetime, timedelta, timezone
     from sqlalchemy import func
     from database.models import AuditLog
-    from utils.costs import INPUT_PRICE_PER_MILLION, OUTPUT_PRICE_PER_MILLION
-    from utils.config import GROQ_MODEL
+    from utils.costs import prices_for
+    from utils.config import GROQ_MODEL, PREDICTOR_MODEL
 
     since = datetime.now(timezone.utc) - timedelta(days=days)
     window = db.query(AuditLog).filter(AuditLog.created_at >= since)
@@ -1073,6 +1284,18 @@ def get_costs(
         .all()
     )
 
+    by_model = (
+        with_usage.with_entities(
+            AuditLog.model,
+            func.count(AuditLog.id),
+            func.sum(AuditLog.total_tokens),
+            func.sum(AuditLog.cost_usd),
+        )
+        .group_by(AuditLog.model)
+        .order_by(func.sum(AuditLog.cost_usd).desc())
+        .all()
+    )
+
     by_day = (
         with_usage.with_entities(
             func.date(AuditLog.created_at),
@@ -1087,10 +1310,14 @@ def get_costs(
     return {
         "period_days": days,
         "budget": budget_status(db),
+        "prediction_cache": prediction_cache_stats(db),
         "pricing": {
             "model": GROQ_MODEL,
-            "input_usd_per_million": INPUT_PRICE_PER_MILLION,
-            "output_usd_per_million": OUTPUT_PRICE_PER_MILLION,
+            "input_usd_per_million": prices_for(GROQ_MODEL)[0],
+            "output_usd_per_million": prices_for(GROQ_MODEL)[1],
+            "predictor_model": PREDICTOR_MODEL or GROQ_MODEL,
+            "predictor_input_usd_per_million": prices_for(PREDICTOR_MODEL or GROQ_MODEL)[0],
+            "predictor_output_usd_per_million": prices_for(PREDICTOR_MODEL or GROQ_MODEL)[1],
         },
         "totals": {
             "llm_calls": totals[0] or 0,
@@ -1112,6 +1339,11 @@ def get_costs(
              "cost_usd": money(cost),
              "avg_cost_per_request_usd": money((cost or 0) / reqs) if reqs else 0.0}
             for ep, reqs, tokens, cost in by_endpoint
+        ],
+        "by_model": [
+            {"model": m, "calls": calls, "total_tokens": int(tokens or 0),
+             "cost_usd": money(cost)}
+            for m, calls, tokens, cost in by_model
         ],
         "by_day": [
             {"date": str(day), "total_tokens": int(tokens or 0), "cost_usd": money(cost)}
@@ -1195,8 +1427,10 @@ def get_post_history(user_id: PathID, request: Request, db: Session = Depends(ge
 
 # ── Engagement Predictor ────────────────────────────────────────────────
 
+# The budget is checked inside the route, after the cache: a cached score costs
+# nothing, so it is still served once the daily budget is used up.
 @app.post("/predict", tags=["Predictor"], response_model=PredictResponse,
-          dependencies=[Depends(verify_api_key), Depends(enforce_budget)])
+          dependencies=[Depends(verify_api_key)])
 @limiter.limit("10/minute")
 def predict(request: Request, body: PredictRequest, db: Session = Depends(get_db)):
     """Predict engagement for a draft post before publishing."""
@@ -1248,9 +1482,21 @@ def predict(request: Request, body: PredictRequest, db: Session = Depends(get_db
             detail="Provide either post_id (to score a saved post) or draft_content.",
         )
 
-    result = predict_engagement(draft_content, brand_context, history, db=db)
+    # A repeat of an unchanged request is answered from the cache: same score,
+    # no Groq call. See services/prediction_cache.py for what counts as unchanged.
+    from services import prediction_cache
+    model, prompt_version = prediction_cache.predictor_setup(db)
+    key = prediction_cache.cache_key(draft_content, brand_context, history,
+                                     model, prompt_version)
+    result = prediction_cache.lookup(db, key)
+    cached = result is not None
+    if not cached:
+        enforce_budget()
+        result = predict_engagement(draft_content, brand_context, history, db=db)
+        prediction_cache.store(db, key, result, model, prompt_version)
 
     return {
+        "cached": cached,
         "overall_score": result.get("overall_score", 50),
         "predicted_likes": result.get("predicted_likes", "N/A"),
         "predicted_comments": result.get("predicted_comments", "N/A"),

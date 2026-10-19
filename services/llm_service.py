@@ -32,13 +32,16 @@ client = OpenAI(
 )
 
 from utils.config import GROQ_MODEL as MODEL
-from utils.config import LLM_MAX_TOKENS, LLM_REASONING_EFFORT
+from utils.config import LLM_MAX_TOKENS, LLM_REASONING_EFFORT, PREDICTOR_MODEL
 from utils.costs import Usage, usage_from_openai
 from utils.request_context import endpoint_var, request_id_var
 
 # Usage reported by the most recent provider response in this context. Set by
 # _call_with_retry, consumed by _log_audit, so callers never handle it.
 _last_usage: ContextVar[Optional[Usage]] = ContextVar("last_usage", default=None)
+# The model the last call actually used, so the audit row records the truth
+# when one agent runs on a different model from the rest.
+_last_model: ContextVar[Optional[str]] = ContextVar("last_model", default=None)
 
 MAX_RETRIES = 3
 INITIAL_RETRY_DELAY = 5  # seconds
@@ -49,7 +52,7 @@ INITIAL_RETRY_DELAY = 5  # seconds
 def _log_audit(db: Optional[Session], trace_id: str, agent_name: str, prompt_version: int,
                input_summary: str, output_summary: str, latency_ms: float,
                status: str = "success", error_message: str = None,
-               usage: Optional[Usage] = None):
+               usage: Optional[Usage] = None, model: Optional[str] = None):
     """Write one LLM call to the audit log, with its token usage and cost.
 
     Opens its own session when the caller has none, so calls made from inside
@@ -61,6 +64,8 @@ def _log_audit(db: Optional[Session], trace_id: str, agent_name: str, prompt_ver
     if usage is None:
         usage = _last_usage.get()
     _last_usage.set(None)
+    model = model or (usage.model if usage else None) or _last_model.get() or MODEL
+    _last_model.set(None)
 
     own_session = db is None
     if own_session:
@@ -74,7 +79,7 @@ def _log_audit(db: Optional[Session], trace_id: str, agent_name: str, prompt_ver
             prompt_version=prompt_version,
             input_summary=input_summary[:500] if input_summary else None,
             output_summary=output_summary[:500] if output_summary else None,
-            model=MODEL,
+            model=model,
             latency_ms=latency_ms,
             status=status,
             error_message=error_message,
@@ -103,8 +108,10 @@ def log_llm_call(agent_name: str, usage: Optional[Usage], latency_ms: float,
                  status: str = "success", error_message: str = None,
                  input_summary: str = None, output_summary: str = None) -> None:
     """Record an LLM call made outside this module, e.g. an agent loop."""
+    # Agent loops run on GROQ_MODEL (see utils/agent_runtime.py).
     _log_audit(None, str(uuid.uuid4()), agent_name, None, input_summary,
-               output_summary, latency_ms, status, error_message, usage=usage)
+               output_summary, latency_ms, status, error_message, usage=usage,
+               model=MODEL)
 
 
 # ── Prompt Versioning ───────────────────────────────────────────
@@ -187,11 +194,16 @@ def _finish(db: Optional[Session], trace_id: str, agent_name: str, prompt_versio
 
 # ── Core LLM Call with Retry ────────────────────────────────────
 
-def _call_with_retry(prompt: str, trace_id: str = None) -> str:
-    """Call Groq with exponential backoff retry for rate limits."""
+def _call_with_retry(prompt: str, trace_id: str = None, model: Optional[str] = None) -> str:
+    """Call Groq with exponential backoff retry for rate limits.
+
+    `model` overrides GROQ_MODEL for this one call (the predictor uses it).
+    """
     if not trace_id:
         trace_id = str(uuid.uuid4())
+    used_model = model or MODEL
     _last_usage.set(None)
+    _last_model.set(used_model)
 
     options = {}
     if LLM_REASONING_EFFORT:
@@ -203,7 +215,7 @@ def _call_with_retry(prompt: str, trace_id: str = None) -> str:
         attempt += 1
         try:
             response = client.chat.completions.create(
-                model=MODEL,
+                model=used_model,
                 messages=[
                     {"role": "system", "content": "You are a helpful assistant. Always respond with valid JSON only, no extra text."},
                     {"role": "user", "content": prompt},
@@ -213,7 +225,7 @@ def _call_with_retry(prompt: str, trace_id: str = None) -> str:
                 response_format={"type": "json_object"},
                 **options,
             )
-            _last_usage.set(usage_from_openai(getattr(response, "usage", None)))
+            _last_usage.set(usage_from_openai(getattr(response, "usage", None), used_model))
             return response.choices[0].message.content
         except Exception as e:
             error_msg = str(e).lower()
@@ -480,14 +492,21 @@ def _composite_score(result: dict) -> int:
 
 
 def predict_engagement(draft_content: str, brand_profile: dict,
-                       engagement_history: list, db: Session = None) -> dict:
-    """Predict engagement for a draft post based on brand and history."""
+                       engagement_history: list, db: Session = None,
+                       model: Optional[str] = None,
+                       prompt_version: Optional[int] = None) -> dict:
+    """Predict engagement for a draft post based on brand and history.
+
+    Runs on `model` if given, else PREDICTOR_MODEL if set, else GROQ_MODEL.
+    Uses the active predictor prompt unless `prompt_version` names one.
+    """
     trace_id = str(uuid.uuid4())
     start = time.time()
 
-    prompt_version = 0
-    template = None
-    template, prompt_version = _active_prompt(db, "predictor")
+    if prompt_version is None:
+        template, prompt_version = _active_prompt(db, "predictor")
+    else:
+        template, prompt_version = _prompt_version(db, "predictor", prompt_version)
 
     avg_likes = 0
     avg_comments = 0
@@ -538,7 +557,11 @@ Return ONLY valid JSON with these keys:
 Return ONLY the JSON object, no extra text."""
 
     logger.info("[%s] Predicting engagement for draft", trace_id)
-    text = _call_with_retry(prompt, trace_id)
+    chosen = model or PREDICTOR_MODEL
+    if chosen and chosen != MODEL:
+        text = _call_with_retry(prompt, trace_id, model=chosen)
+    else:
+        text = _call_with_retry(prompt, trace_id)
     result = _finish(db, trace_id, "predictor", prompt_version,
                      f"draft={draft_content[:100]}", text, start)
 

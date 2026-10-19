@@ -162,6 +162,11 @@ class TestHardLimit:
         ("/orchestrate", {**PROFILE, "topic": "Designing for elderly patients"}),
     ])
     def test_llm_routes_return_429(self, client, path, body):
+        if path == "/predict":
+            # /predict checks the budget after its cache, so it needs a real
+            # profile to get that far.
+            uid = client.post("/brand", json=PROFILE, headers=AUTH).json()["id"]
+            body = {**body, "user_id": uid}
         _spend(1.00)
         res = client.post(path, json=body, headers=AUTH)
         assert res.status_code == 429
@@ -182,6 +187,22 @@ class TestHardLimit:
         assert client.post(f"/posts/{post_id}/review", json={"decision": "approve"},
                            headers=AUTH).status_code == 200
         assert client.get("/health").status_code == 200
+
+    def test_a_cached_score_is_still_served(self, client):
+        """A cache hit costs nothing, so the budget does not block it."""
+        uid = client.post("/brand", json=PROFILE, headers=AUTH).json()["id"]
+        draft = {"user_id": uid, "draft_content": "A draft worth scoring twice."}
+        first = client.post("/predict", json=draft, headers=AUTH)
+        assert first.status_code == 200 and first.json()["cached"] is False
+
+        _spend(1.00)
+        again = client.post("/predict", json=draft, headers=AUTH)
+        assert again.status_code == 200 and again.json()["cached"] is True
+        assert again.json()["overall_score"] == first.json()["overall_score"]
+
+        new = client.post("/predict", json={**draft, "draft_content": "A different draft."},
+                          headers=AUTH)
+        assert new.status_code == 429
 
     def test_auth_is_checked_before_budget(self, client):
         _spend(1.00)

@@ -171,6 +171,8 @@ class PredictResponse(BaseModel):
     # controls when post_id is not None.
     post_id: Optional[int] = None
     status: Optional[str] = None
+    # True when an unchanged request was answered from the prediction cache.
+    cached: bool = False
 
 
 class ReviewRequest(BaseModel):

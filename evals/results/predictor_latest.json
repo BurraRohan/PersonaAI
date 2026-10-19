@@ -1,0 +1,223 @@
+{
+  "run_id": "20261019-092425",
+  "mode": "prompt",
+  "baseline_model": "openai/gpt-oss-120b",
+  "candidate_model": "openai/gpt-oss-120b",
+  "baseline_version": 2,
+  "candidate_version": 4,
+  "baseline_label": "gpt-oss-120b v2",
+  "candidate_label": "gpt-oss-120b v4",
+  "posts": 10,
+  "baseline": {
+    "scored": "10/10",
+    "failures": 0,
+    "mean_score": 64.1,
+    "cost_per_score_usd": 0.000614,
+    "latency_ms_mean": 10472,
+    "agrees_with_rules": 0.38
+  },
+  "candidate": {
+    "scored": "10/10",
+    "failures": 0,
+    "mean_score": 67.4,
+    "cost_per_score_usd": 0.000648,
+    "latency_ms_mean": 12128,
+    "agrees_with_rules": 0.66
+  },
+  "between": {
+    "paired": 10,
+    "mean_gap": 10.1,
+    "max_gap": 22,
+    "pair_agreement": 0.57
+  },
+  "verdict": {
+    "switch": true,
+    "reason": "v4 agreed with the writing rules on 66% of post pairs, up from 38% for v2. Activate it with POST /prompts/predictor/rollback/4."
+  },
+  "rows": {
+    "current": [
+      {
+        "version": 1,
+        "case_id": "first-pull-request",
+        "rule_score": 6,
+        "overall_score": 70,
+        "total_tokens": 1864,
+        "cost_usd": 0.0006747,
+        "latency_ms": 2638
+      },
+      {
+        "version": 1,
+        "case_id": "timestamp-ids",
+        "rule_score": 37,
+        "overall_score": 67,
+        "total_tokens": 1790,
+        "cost_usd": 0.0006186,
+        "latency_ms": 2272
+      },
+      {
+        "version": 2,
+        "case_id": "data-streaming",
+        "rule_score": 60,
+        "overall_score": 80,
+        "total_tokens": 1516,
+        "cost_usd": 0.0005091,
+        "latency_ms": 4906
+      },
+      {
+        "version": 3,
+        "case_id": "iam-mistake",
+        "rule_score": 73,
+        "overall_score": 60,
+        "total_tokens": 1963,
+        "cost_usd": 0.0007818,
+        "latency_ms": 13756
+      },
+      {
+        "version": 3,
+        "case_id": "elderly-buttons",
+        "rule_score": 79,
+        "overall_score": 60,
+        "total_tokens": 1728,
+        "cost_usd": 0.00058905,
+        "latency_ms": 16357
+      },
+      {
+        "version": 3,
+        "case_id": "kafka-startup",
+        "rule_score": 85,
+        "overall_score": 60,
+        "total_tokens": 1625,
+        "cost_usd": 0.0005745,
+        "latency_ms": 12980
+      },
+      {
+        "version": 3,
+        "case_id": "first-pull-request",
+        "rule_score": 93,
+        "overall_score": 50,
+        "total_tokens": 1776,
+        "cost_usd": 0.00063675,
+        "latency_ms": 13297
+      },
+      {
+        "version": 5,
+        "case_id": "kafka-startup",
+        "rule_score": 97,
+        "overall_score": 58,
+        "total_tokens": 1692,
+        "cost_usd": 0.00059355,
+        "latency_ms": 12221
+      },
+      {
+        "version": 4,
+        "case_id": "data-streaming",
+        "rule_score": 100,
+        "overall_score": 72,
+        "total_tokens": 1795,
+        "cost_usd": 0.0006468,
+        "latency_ms": 14319
+      },
+      {
+        "version": 5,
+        "case_id": "timestamp-ids",
+        "rule_score": 100,
+        "overall_score": 64,
+        "total_tokens": 1572,
+        "cost_usd": 0.0005166,
+        "latency_ms": 11977
+      }
+    ],
+    "candidate": [
+      {
+        "version": 1,
+        "case_id": "first-pull-request",
+        "rule_score": 6,
+        "overall_score": 50,
+        "total_tokens": 2035,
+        "cost_usd": 0.00058785,
+        "latency_ms": 1719
+      },
+      {
+        "version": 1,
+        "case_id": "timestamp-ids",
+        "rule_score": 37,
+        "overall_score": 72,
+        "total_tokens": 2171,
+        "cost_usd": 0.00065775,
+        "latency_ms": 1997
+      },
+      {
+        "version": 2,
+        "case_id": "data-streaming",
+        "rule_score": 60,
+        "overall_score": 70,
+        "total_tokens": 2162,
+        "cost_usd": 0.00070725,
+        "latency_ms": 16478
+      },
+      {
+        "version": 3,
+        "case_id": "iam-mistake",
+        "rule_score": 73,
+        "overall_score": 71,
+        "total_tokens": 2271,
+        "cost_usd": 0.00077715,
+        "latency_ms": 18577
+      },
+      {
+        "version": 3,
+        "case_id": "elderly-buttons",
+        "rule_score": 79,
+        "overall_score": 59,
+        "total_tokens": 1928,
+        "cost_usd": 0.0005772,
+        "latency_ms": 5942
+      },
+      {
+        "version": 3,
+        "case_id": "kafka-startup",
+        "rule_score": 85,
+        "overall_score": 57,
+        "total_tokens": 1848,
+        "cost_usd": 0.00051885,
+        "latency_ms": 13627
+      },
+      {
+        "version": 3,
+        "case_id": "first-pull-request",
+        "rule_score": 93,
+        "overall_score": 53,
+        "total_tokens": 2083,
+        "cost_usd": 0.0006315,
+        "latency_ms": 16129
+      },
+      {
+        "version": 5,
+        "case_id": "kafka-startup",
+        "rule_score": 97,
+        "overall_score": 80,
+        "total_tokens": 2045,
+        "cost_usd": 0.0006159,
+        "latency_ms": 14032
+      },
+      {
+        "version": 4,
+        "case_id": "data-streaming",
+        "rule_score": 100,
+        "overall_score": 87,
+        "total_tokens": 2333,
+        "cost_usd": 0.00078015,
+        "latency_ms": 16635
+      },
+      {
+        "version": 5,
+        "case_id": "timestamp-ids",
+        "rule_score": 100,
+        "overall_score": 75,
+        "total_tokens": 2072,
+        "cost_usd": 0.00062715,
+        "latency_ms": 16142
+      }
+    ]
+  }
+}

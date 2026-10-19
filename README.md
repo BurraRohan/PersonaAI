@@ -35,10 +35,11 @@ Define Brand → Generate Post → Evaluate → Edit & Approve → Publish → L
 - **Profile management** — create, edit and delete profiles. Edits apply to posts generated afterwards; deletion removes posts and engagement records with no orphaned rows, while audit logs are kept
 - **Feedback loop** — analyses recorded engagement and recommends specific changes, referencing actual post topics and numbers
 - **Prompt versioning** — every prompt lives in the database with a version number; rollback to any prior version takes one API call and no redeploy. Five content-voice versions ship, from influencer register to plain technical prose
-- **Prompt evaluation** — a harness runs each prompt version over a fixed set of test cases, scores every post against the prompt's own writing rules, and ranks versions by quality and cost per post
+- **Prompt evaluation** — a harness runs each prompt version over a fixed set of test cases, scores every post against the prompt's own writing rules, and ranks versions by quality and cost per post. A second comparison checks whether a cheaper model scores posts the way the current one does
 - **Audit logging** — every LLM call recorded with a trace ID, model, prompt version, latency and status
 - **Token cost tracking** — every LLM call, including each step of an agent loop, records its input, cached and output tokens and what it cost. Spend by agent, endpoint and day is visible only to the operator, behind a separate admin key
 - **Daily budget guard** — a daily spend limit. Past 80% the agents pause and requests take the cheaper direct path; at 100% generation stops until midnight UTC while the rest of the app keeps working. Users see a plain message, never the amounts
+- **Prediction cache** — scoring an unchanged draft again returns the stored score instantly and at no cost; any change to the draft, profile, engagement history, model or predictor prompt produces a fresh score
 - **Security hardening** — bearer token auth, rate limiting, bounded inputs, sanitised model output, a strict Content-Security-Policy, and agent tools scoped so prompt text cannot redirect them to another profile
 - **Prometheus metrics** — request counts, latency histograms and error rates at `/metrics` (API key required)
 - **Streamlit dashboard** — engagement trends, audit log inspection and token spend
@@ -101,7 +102,7 @@ The UI asks for your API key once and keeps it in `localStorage`, so it survives
 pytest -q
 ```
 
-246 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output. `tests/test_security.py` covers each protection listed under [Security](#security), `tests/test_costs.py` covers the cost arithmetic and who can see it, `tests/test_budget.py` covers the daily budget, and `tests/test_evals.py` covers the evaluation scoring and runner.
+303 tests, all offline — the Groq boundary is stubbed, so the suite covers this project's logic rather than the model's output. `tests/test_security.py` covers each protection listed under [Security](#security), `tests/test_costs.py` covers the cost arithmetic and who can see it, `tests/test_budget.py` covers the daily budget, `tests/test_evals.py` covers the evaluation scoring and runner, `tests/test_predictor_model.py` covers the predictor's own model, prompts v3 and v4, and the comparison, and `tests/test_prediction_cache.py` covers when a cached score may and may not be reused.
 
 The same suite runs on GitHub Actions on every push to `main` (see
 `.github/workflows/tests.yml`). Because nothing hits the network, CI needs only
@@ -363,6 +364,47 @@ calls and roughly 120K tokens, more than half of Groq's free daily allowance of
 touched: each call names its prompt version, so the active version stays as it
 was.
 
+### Predictor comparison
+
+The engagement predictor can be changed in two ways, and each is measured on
+the same posts before it reaches users:
+
+```bash
+python -m evals.compare_predictor                        # a cheaper model, same prompt
+python -m evals.compare_predictor --candidate-version 4  # a new prompt, same model
+```
+
+Both reuse posts from the last prompt evaluation, picked to span the lowest to
+the highest rule score, so nothing new is generated. Each side scores every
+post, and the report gives failures, cost and time per score, how often each
+side agrees with the rule checks on which of two posts is better, and how far
+apart the two sides' scores are.
+
+**A cheaper model** (`PREDICTOR_MODEL=openai/gpt-oss-20b` costs half as much)
+should judge posts the way the current one does, because the aim is to save
+money without changing what users see. It passes if it fails no more often,
+stays within 8 points on average, and orders at least 80% of post pairs the
+same way.
+
+**A new prompt version** should judge posts *better*, so here the scores are
+meant to change. It passes if it agrees with the rule checks on at least 65% of
+post pairs, at least 15 points more than the active version, with no more
+failures. It is activated with `POST /prompts/predictor/rollback/<version>`.
+
+Predictor v3 exists because v2 and the content prompt pulled in opposite
+directions. v2 capped any post without numbers or a first-hand story at 55,
+while the content prompt forbids inventing either, so honest posts were marked
+down and posts with made-up statistics were rewarded. v3 treats unsupported
+specifics as a credibility risk, judges the hook and call to action by the
+content prompt's standards, and never suggests adding statistics or emoji. v4
+keeps those rules and fences the draft off at the end of the prompt, between
+marker lines, so the model never mistakes an instruction heading for the post's
+closing line. Each new version ships inactive until the comparison supports it.
+
+All thresholds are judgement calls and sit at the top of
+`evals/compare_predictor.py`. Results are written to
+`evals/results/predictor_latest.md`.
+
 ---
 
 ## Token Usage & Cost
@@ -375,16 +417,16 @@ cost = uncached input × input price + cached input × input price × 0.5 + outp
 
 | | |
 | --- | --- |
-| Prices | $0.15 input / $0.60 output per million tokens (Groq, `openai/gpt-oss-120b`). Set in `.env`. |
+| Prices | $0.15 input / $0.60 output per million tokens (Groq, `openai/gpt-oss-120b`), set in `.env`. A call on another model is priced at that model's rate, e.g. $0.075 / $0.30 for `openai/gpt-oss-20b`, and the audit log records which model made it. |
 | Agent loops | Logged as `<agent>_agent` (e.g. `brand_agent`), separate from the calls its tools make (`brand`) |
 | Per action | All calls in one request share a `request_id` and endpoint, so an action's cost is the sum of its rows |
 | Access | `ADMIN_API_KEY` only. The app's `API_KEY` gets a 403, and the routes are off when no admin key is set. |
 
 | Where | Shows |
 | --- | --- |
-| `GET /costs?days=30` | Budget state, totals, plus cost by agent, by endpoint (average per request) and by day |
+| `GET /costs?days=30` | Budget state, prediction cache savings, totals, plus cost by agent, by model, by endpoint (average per request) and by day |
 | `GET /audit-logs` | Tokens, cost, request id and endpoint for each call |
-| Streamlit dashboard | Today's spend against the budget, total spend, cost per action, agent-loop share, cost by agent and day, most expensive actions |
+| Streamlit dashboard | Today's spend against the budget, cache savings, total spend, cost per action, agent-loop share, cost by agent and day, most expensive actions |
 
 Cost is saved when the call is made, so a later price change does not alter past
 figures. Groq's [console](https://console.groq.com) usage page is the billing record.
@@ -397,17 +439,37 @@ figures. Groq's [console](https://console.groq.com) usage page is the billing re
 | --- | --- |
 | Under 80% | Normal operation |
 | 80% or more | Agent loops pause. `/brand`, `/generate` and `/feedback` make one direct call instead and report `execution_mode: "budget_direct"` |
-| 100% or more | The five routes that call the model return 429 until midnight UTC. Dashboard, history, review and engagement keep working |
+| 100% or more | The five routes that call the model return 429 until midnight UTC. A `/predict` request already in the [prediction cache](#prediction-cache) is still answered, since it costs nothing. Dashboard, history, review and engagement keep working |
 
 Users see only "The daily AI usage limit has been reached"; amounts stay on the
 operator routes. The 80% mark is `BUDGET_SOFT_LIMIT_PERCENT`. Leave
 `DAILY_BUDGET_USD` empty to switch the guard off.
 
+### Prediction cache
+
+The same draft is often scored more than once: a reviewer reopens a post, or
+scores it again after reading the tips. `/predict` answers a repeat from a
+stored result instead of calling Groq, so it is instant, free, and gives the
+same score rather than a slightly different one.
+
+A stored score is reused only when everything that shapes it is unchanged: the
+draft text (trailing spaces aside; line breaks count, because they change the
+readability score), the profile's tone, themes and positioning, its engagement
+history, the model and the predictor prompt version. Editing the profile,
+logging engagement, setting `PREDICTOR_MODEL` or activating another predictor
+prompt always produces a fresh score. Entries expire after
+`PREDICTION_CACHE_HOURS` (default 24; `0` turns the cache off).
+
+Hits are not LLM calls, so they do not appear in the audit log; `/costs`
+reports them separately as hits and money saved. Because a hit costs nothing, it is served even after the daily budget is used up. The evaluation scripts call
+the predictor directly and never read the cache, so they always measure the
+model itself.
+
 ---
 
 ## API Endpoints
 
-Every endpoint except `/health` requires an `Authorization: Bearer <your-api-key>` header. The two operator routes, `/costs` and `/audit-logs`, take `ADMIN_API_KEY` instead. With a [daily budget](#daily-budget) set, `/brand`, `/generate`, `/feedback`, `/predict` and `/orchestrate` return 429 once it is used up.
+Every endpoint except `/health` requires an `Authorization: Bearer <your-api-key>` header. The two operator routes, `/costs` and `/audit-logs`, take `ADMIN_API_KEY` instead. With a [daily budget](#daily-budget) set, `/brand`, `/generate`, `/feedback`, `/predict` and `/orchestrate` return 429 once it is used up, except for a `/predict` request the cache can answer.
 
 | Method | Endpoint                                   | Description                                                | Rate limit |
 | ------ | ------------------------------------------ | ---------------------------------------------------------- | ---------- |
@@ -466,7 +528,8 @@ PersonaAI/
 │   ├── feedback_agent.py    # ReAct agent: engagement analysis
 │   └── orchestrator.py      # LangGraph StateGraph with conditional edges
 ├── services/
-│   └── llm_service.py       # Groq wrapper: retries, JSON parsing, output sanitising
+│   ├── llm_service.py       # Groq wrapper: retries, JSON parsing, output sanitising
+│   └── prediction_cache.py  # Reuses predictions whose inputs are unchanged
 ├── database/
 │   ├── models.py            # SQLAlchemy ORM models
 │   └── db.py                # Engine, session, additive schema migration
@@ -483,11 +546,12 @@ PersonaAI/
 │   ├── rate_limiter.py      # Request rate limiting
 │   └── observability.py     # Prometheus metrics + structured logging
 ├── static/                  # Frontend UI (6-tab dashboard)
-├── tests/                   # pytest suite (246 tests, no network required)
+├── tests/                   # pytest suite (303 tests, no network required)
 ├── evals/
 │   ├── cases.json           # Fixed test briefs for prompt evaluation
 │   ├── scoring.py           # Rule-based post scoring
 │   ├── run_eval.py          # Runs prompt versions and ranks them
+│   ├── compare_predictor.py # Compares predictor models or prompt versions
 │   └── results/             # latest.md and latest.json from the last run
 ├── streamlit_dashboard.py   # Observability, cost and evaluation dashboard
 ├── Dockerfile
@@ -517,6 +581,8 @@ PersonaAI/
 | `BUDGET_SOFT_LIMIT_PERCENT` | Share of the budget at which agents pause                     | No       | `80`                                          |
 | `LLM_MAX_TOKENS`    | Output cap per structured call, reasoning included                    | No       | `4096`                                        |
 | `LLM_REASONING_EFFORT` | `low`, `medium` or `high` reasoning for gpt-oss; empty uses Groq's default | No | — (Groq default)                     |
+| `PREDICTOR_MODEL`   | Model for the engagement predictor only; empty uses `GROQ_MODEL`     | No       | — (`GROQ_MODEL`)                              |
+| `PREDICTION_CACHE_HOURS` | How long a stored prediction is reused; `0` turns the cache off | No       | `24`                                          |
 
 gpt-oss is a reasoning model, and its hidden reasoning counts against
 `LLM_MAX_TOKENS` along with the visible answer. If the cap is too low, the model

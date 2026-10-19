@@ -39,12 +39,29 @@ INPUT_PRICE_PER_MILLION = _price("LLM_INPUT_PRICE_PER_MILLION", "0.15")
 OUTPUT_PRICE_PER_MILLION = _price("LLM_OUTPUT_PRICE_PER_MILLION", "0.60")
 CACHED_INPUT_DISCOUNT = 0.5
 
+# Groq's published rates (USD per million tokens, input and output) for models
+# a single agent can be moved to, e.g. PREDICTOR_MODEL. GROQ_MODEL itself is
+# priced from the two settings above, so its rate stays configurable. A model
+# not listed here is priced like GROQ_MODEL. Check https://groq.com/pricing.
+KNOWN_PRICES = {
+    "openai/gpt-oss-120b": (0.15, 0.60),
+    "openai/gpt-oss-20b": (0.075, 0.30),
+}
+
+
+def prices_for(model: Optional[str] = None) -> tuple:
+    """(input, output) USD per million tokens for the model that made a call."""
+    if model and model != os.getenv("GROQ_MODEL") and model in KNOWN_PRICES:
+        return KNOWN_PRICES[model]
+    return INPUT_PRICE_PER_MILLION, OUTPUT_PRICE_PER_MILLION
+
 
 @dataclass
 class Usage:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_tokens: int = 0
+    model: Optional[str] = None
 
     @property
     def total_tokens(self) -> int:
@@ -52,24 +69,28 @@ class Usage:
 
     @property
     def cost_usd(self) -> float:
-        return cost_usd(self.prompt_tokens, self.completion_tokens, self.cached_tokens)
+        return cost_usd(self.prompt_tokens, self.completion_tokens, self.cached_tokens,
+                        self.model)
 
     def __add__(self, other: "Usage") -> "Usage":
         return Usage(
             self.prompt_tokens + other.prompt_tokens,
             self.completion_tokens + other.completion_tokens,
             self.cached_tokens + other.cached_tokens,
+            self.model or other.model,
         )
 
 
-def cost_usd(prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0) -> float:
-    """Cost of one call in US dollars."""
+def cost_usd(prompt_tokens: int, completion_tokens: int, cached_tokens: int = 0,
+             model: Optional[str] = None) -> float:
+    """Cost of one call in US dollars, at the rate of the model that made it."""
+    input_price, output_price = prices_for(model)
     cached = max(0, min(cached_tokens, prompt_tokens))
     uncached = prompt_tokens - cached
     dollars = (
-        uncached * INPUT_PRICE_PER_MILLION
-        + cached * INPUT_PRICE_PER_MILLION * CACHED_INPUT_DISCOUNT
-        + completion_tokens * OUTPUT_PRICE_PER_MILLION
+        uncached * input_price
+        + cached * input_price * CACHED_INPUT_DISCOUNT
+        + completion_tokens * output_price
     ) / 1_000_000
     return round(dollars, 8)
 
@@ -89,7 +110,7 @@ def _int(value: Any) -> int:
         return 0
 
 
-def usage_from_openai(usage: Any) -> Optional[Usage]:
+def usage_from_openai(usage: Any, model: Optional[str] = None) -> Optional[Usage]:
     """Read the `usage` block of an OpenAI-compatible chat completion."""
     if usage is None:
         return None
@@ -98,6 +119,7 @@ def usage_from_openai(usage: Any) -> Optional[Usage]:
         prompt_tokens=_int(_get(usage, "prompt_tokens")),
         completion_tokens=_int(_get(usage, "completion_tokens")),
         cached_tokens=_int(_get(details, "cached_tokens")),
+        model=model,
     )
 
 

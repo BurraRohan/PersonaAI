@@ -1,6 +1,7 @@
 """
 SQLAlchemy ORM models for PersonaAI.
-Tables: brand_profiles, posts, engagements, prompt_templates, audit_logs.
+Tables: brand_profiles, posts, engagements, prompt_templates, audit_logs,
+prediction_cache.
 """
 
 from datetime import datetime, timezone
@@ -127,3 +128,26 @@ class AuditLog(Base):
     endpoint = Column(String(100), nullable=True)
 
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class PredictionCache(Base):
+    """A stored engagement prediction, reused while its inputs are unchanged.
+
+    The key is a hash of everything that shapes a prediction: the draft text,
+    the brand profile fields the predictor reads, the engagement history, the
+    model and the predictor prompt version. Change any of them and the key
+    changes, so a stale score is never served.
+    """
+
+    __tablename__ = "prediction_cache"
+
+    id = Column(Integer, primary_key=True, index=True)
+    cache_key = Column(String(64), nullable=False, unique=True, index=True)
+    result_json = Column(Text, nullable=False)
+    model = Column(String(100), nullable=True)
+    prompt_version = Column(Integer, nullable=True)
+    # What the original call cost, so hits can be counted as money saved.
+    cost_usd = Column(Float, nullable=True)
+    hit_count = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    last_hit_at = Column(DateTime, nullable=True)

@@ -73,3 +73,10 @@ LLM_MAX_TOKENS = _as_int(os.getenv("LLM_MAX_TOKENS"), 4096, 256, 32768)
 # cheaper and faster; whether quality holds is a question for evals/run_eval.
 _effort = (os.getenv("LLM_REASONING_EFFORT") or "").strip().lower()
 LLM_REASONING_EFFORT = _effort if _effort in {"low", "medium", "high"} else None
+
+
+# Model for the engagement predictor only. Empty means GROQ_MODEL, like every
+# other call. Scoring a draft is a narrower job than writing one, so a smaller,
+# cheaper model may do it as well; evals/compare_predictor.py measures whether
+# it does before you switch.
+PREDICTOR_MODEL = (os.getenv("PREDICTOR_MODEL") or "").strip() or None

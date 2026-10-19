@@ -265,9 +265,13 @@ class TestPredictorPromptV2:
             .order_by(PromptTemplate.version)
             .all()
         )
-        assert [v.version for v in versions] == [1, 2]
+        assert [v.version for v in versions] == [1, 2, 3, 4]
         assert versions[0].is_active is False
         assert versions[1].is_active is True
+        # v3 and v4 ship inactive: each is switched on by hand once the
+        # comparison shows it agrees better with the writing rules.
+        assert versions[2].is_active is False
+        assert versions[3].is_active is False
 
     def test_v2_has_no_literal_example_ranges(self, temp_db):
         """v1 leaked its examples into model output; v2 must not contain them."""
