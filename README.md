@@ -84,10 +84,10 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 uvicorn main:app --reload
 ```
 
-|                    |                               |
-| ------------------ | ----------------------------- |
-| App UI             | http://127.0.0.1:8000         |
-| Swagger docs       | http://127.0.0.1:8000/docs    |
+|                    |                                                                                   |
+| ------------------ | --------------------------------------------------------------------------------- |
+| App UI             | http://127.0.0.1:8000                                                             |
+| Swagger docs       | http://127.0.0.1:8000/docs                                                        |
 | Prometheus metrics | http://127.0.0.1:8000/metrics (API key required — use Swagger's Authorize button) |
 | Token cost summary | http://127.0.0.1:8000/costs (admin key required — the `AdminKey` lock in Swagger) |
 
@@ -129,10 +129,10 @@ docker-compose up --build
 
 Every response carries two fields that make this inspectable:
 
-| Field            | Meaning                                                                                                                                                                                    |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Field            | Meaning                                                                                                                                                                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `execution_mode` | `agent` when the agent ran and persisted its work; `direct` when `AGENT_MODE=0` was set deliberately; `fallback_direct` when the agent failed and the single-call path rescued the request; `budget_direct` when the [daily budget](#daily-budget) had paused the agents |
-| `agent_trace`    | Ordered list of the tool calls the model chose, and what each returned                                                                                                                     |
+| `agent_trace`    | Ordered list of the tool calls the model chose, and what each returned                                                                                                                                                                                                   |
 
 A trace from `POST /brand`:
 
@@ -359,8 +359,8 @@ them under Prompt Evaluation.
 **What it costs.** These are real Groq calls. Each one goes into the audit log
 tagged `EVAL content vN`, so it counts toward the daily budget and shows up in
 `/costs` separately from user traffic. All five versions over eight cases is 40
-calls and roughly 120K tokens, more than half of Groq's free daily allowance of
-200K, so `--cases 3` is the better choice for a quick check. Production is never
+calls and about 110K tokens (108,776 in the last full run), more than half of
+Groq's free daily allowance of 200K, so `--cases 3` is the better choice for a quick check. Production is never
 touched: each call names its prompt version, so the active version stays as it
 was.
 
@@ -386,7 +386,7 @@ money without changing what users see. It passes if it fails no more often,
 stays within 8 points on average, and orders at least 80% of post pairs the
 same way.
 
-**A new prompt version** should judge posts *better*, so here the scores are
+**A new prompt version** should judge posts _better_, so here the scores are
 meant to change. It passes if it agrees with the rule checks on at least 65% of
 post pairs, at least 15 points more than the active version, with no more
 failures. It is activated with `POST /prompts/predictor/rollback/<version>`.
@@ -415,18 +415,18 @@ Each LLM call stores its token counts and cost in the audit log:
 cost = uncached input × input price + cached input × input price × 0.5 + output × output price
 ```
 
-| | |
-| --- | --- |
-| Prices | $0.15 input / $0.60 output per million tokens (Groq, `openai/gpt-oss-120b`), set in `.env`. A call on another model is priced at that model's rate, e.g. $0.075 / $0.30 for `openai/gpt-oss-20b`, and the audit log records which model made it. |
-| Agent loops | Logged as `<agent>_agent` (e.g. `brand_agent`), separate from the calls its tools make (`brand`) |
-| Per action | All calls in one request share a `request_id` and endpoint, so an action's cost is the sum of its rows |
-| Access | `ADMIN_API_KEY` only. The app's `API_KEY` gets a 403, and the routes are off when no admin key is set. |
+|             |                                                                                                                                                                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Prices      | $0.15 input / $0.60 output per million tokens (Groq, `openai/gpt-oss-120b`), set in `.env`. A call on another model is priced at that model's rate, e.g. $0.075 / $0.30 for `openai/gpt-oss-20b`, and the audit log records which model made it. |
+| Agent loops | Logged as `<agent>_agent` (e.g. `brand_agent`), separate from the calls its tools make (`brand`)                                                                                                                                                 |
+| Per action  | All calls in one request share a `request_id` and endpoint, so an action's cost is the sum of its rows                                                                                                                                           |
+| Access      | `ADMIN_API_KEY` only. The app's `API_KEY` gets a 403, and the routes are off when no admin key is set.                                                                                                                                           |
 
-| Where | Shows |
-| --- | --- |
-| `GET /costs?days=30` | Budget state, prediction cache savings, totals, plus cost by agent, by model, by endpoint (average per request) and by day |
-| `GET /audit-logs` | Tokens, cost, request id and endpoint for each call |
-| Streamlit dashboard | Today's spend against the budget, cache savings, total spend, cost per action, agent-loop share, cost by agent and day, most expensive actions |
+| Where                | Shows                                                                                                                                          |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /costs?days=30` | Budget state, prediction cache savings, totals, plus cost by agent, by model, by endpoint (average per request) and by day                     |
+| `GET /audit-logs`    | Tokens, cost, request id and endpoint for each call                                                                                            |
+| Streamlit dashboard  | Today's spend against the budget, cache savings, total spend, cost per action, agent-loop share, cost by agent and day, most expensive actions |
 
 Cost is saved when the call is made, so a later price change does not alter past
 figures. Groq's [console](https://console.groq.com) usage page is the billing record.
@@ -435,11 +435,11 @@ figures. Groq's [console](https://console.groq.com) usage page is the billing re
 
 `DAILY_BUDGET_USD` in `.env` caps what the app spends per day, midnight to midnight UTC:
 
-| Today's spend | What happens |
-| --- | --- |
-| Under 80% | Normal operation |
-| 80% or more | Agent loops pause. `/brand`, `/generate` and `/feedback` make one direct call instead and report `execution_mode: "budget_direct"` |
-| 100% or more | The five routes that call the model return 429 until midnight UTC. A `/predict` request already in the [prediction cache](#prediction-cache) is still answered, since it costs nothing. Dashboard, history, review and engagement keep working |
+| Today's spend | What happens                                                                                                                                                                                                                                   |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Under 80%     | Normal operation                                                                                                                                                                                                                               |
+| 80% or more   | Agent loops pause. `/brand`, `/generate` and `/feedback` make one direct call instead and report `execution_mode: "budget_direct"`                                                                                                             |
+| 100% or more  | The five routes that call the model return 429 until midnight UTC. A `/predict` request already in the [prediction cache](#prediction-cache) is still answered, since it costs nothing. Dashboard, history, review and engagement keep working |
 
 Users see only "The daily AI usage limit has been reached"; amounts stay on the
 operator routes. The 80% mark is `BUDGET_SOFT_LIMIT_PERCENT`. Leave
@@ -471,28 +471,28 @@ model itself.
 
 Every endpoint except `/health` requires an `Authorization: Bearer <your-api-key>` header. The two operator routes, `/costs` and `/audit-logs`, take `ADMIN_API_KEY` instead. With a [daily budget](#daily-budget) set, `/brand`, `/generate`, `/feedback`, `/predict` and `/orchestrate` return 429 once it is used up, except for a `/predict` request the cache can answer.
 
-| Method | Endpoint                                   | Description                                                | Rate limit |
-| ------ | ------------------------------------------ | ---------------------------------------------------------- | ---------- |
-| POST   | `/brand`                                   | Create a brand profile (brand agent)                       | 10/min     |
-| PATCH  | `/brand/{user_id}`                         | Update any profile field; only fields sent are changed     | 10/min     |
-| DELETE | `/brand/{user_id}`                         | Delete a profile with its posts and engagement records     | 10/min     |
-| POST   | `/generate`                                | Generate a LinkedIn post (content agent)                   | 10/min     |
-| POST   | `/predict`                                 | Score a saved post (by `post_id`) or pasted draft text     | 10/min     |
-| GET    | `/posts/pending/{user_id}`                 | Posts awaiting a human decision                            | —          |
-| GET    | `/posts/{post_id}`                         | One post in full, with status, edit history and engagement | —          |
-| PATCH  | `/posts/{post_id}`                         | Edit a pending post's text or hashtags                     | 30/min     |
-| POST   | `/posts/{post_id}/review`                  | Approve or reject a generated post                         | 30/min     |
-| POST   | `/engagement`                              | Log likes, comments and shares for an **approved** post    | 30/min     |
-| POST   | `/feedback`                                | Strategy feedback from engagement history (feedback agent) | 10/min     |
-| POST   | `/orchestrate`                             | Run the full graph: brand → content → feedback             | 5/min      |
-| GET    | `/dashboard/{user_id}`                     | Brand info, totals, averages, best topic, post list        | —          |
-| GET    | `/history/{user_id}`                       | All posts and engagement for a profile                     | —          |
-| GET    | `/prompts/{agent_name}`                    | List prompt versions for an agent                          | —          |
-| POST   | `/prompts/{agent_name}/rollback/{version}` | Activate a specific prompt version                         | —          |
+| Method | Endpoint                                   | Description                                                                            | Rate limit |
+| ------ | ------------------------------------------ | -------------------------------------------------------------------------------------- | ---------- |
+| POST   | `/brand`                                   | Create a brand profile (brand agent)                                                   | 10/min     |
+| PATCH  | `/brand/{user_id}`                         | Update any profile field; only fields sent are changed                                 | 10/min     |
+| DELETE | `/brand/{user_id}`                         | Delete a profile with its posts and engagement records                                 | 10/min     |
+| POST   | `/generate`                                | Generate a LinkedIn post (content agent)                                               | 10/min     |
+| POST   | `/predict`                                 | Score a saved post (by `post_id`) or pasted draft text                                 | 10/min     |
+| GET    | `/posts/pending/{user_id}`                 | Posts awaiting a human decision                                                        | —          |
+| GET    | `/posts/{post_id}`                         | One post in full, with status, edit history and engagement                             | —          |
+| PATCH  | `/posts/{post_id}`                         | Edit a pending post's text or hashtags                                                 | 30/min     |
+| POST   | `/posts/{post_id}/review`                  | Approve or reject a generated post                                                     | 30/min     |
+| POST   | `/engagement`                              | Log likes, comments and shares for an **approved** post                                | 30/min     |
+| POST   | `/feedback`                                | Strategy feedback from engagement history (feedback agent)                             | 10/min     |
+| POST   | `/orchestrate`                             | Run the full graph: brand → content → feedback                                         | 5/min      |
+| GET    | `/dashboard/{user_id}`                     | Brand info, totals, averages, best topic, post list                                    | —          |
+| GET    | `/history/{user_id}`                       | All posts and engagement for a profile                                                 | —          |
+| GET    | `/prompts/{agent_name}`                    | List prompt versions for an agent                                                      | —          |
+| POST   | `/prompts/{agent_name}/rollback/{version}` | Activate a specific prompt version                                                     | —          |
 | GET    | `/audit-logs`                              | Recent LLM calls with tokens and cost, filterable by `agent_name` (max 500). Admin key | —          |
-| GET    | `/costs`                                   | Token and cost summary over the last `days` (1–365). Admin key | —          |
-| GET    | `/metrics`                                 | Prometheus metrics                                         | —          |
-| GET    | `/health`                                  | Health check (public)                                      | —          |
+| GET    | `/costs`                                   | Token and cost summary over the last `days` (1–365). Admin key                         | —          |
+| GET    | `/metrics`                                 | Prometheus metrics                                                                     | —          |
+| GET    | `/health`                                  | Health check (public)                                                                  | —          |
 
 Valid `agent_name` values: `brand`, `content`, `feedback`, `predictor`.
 
@@ -500,18 +500,18 @@ Valid `agent_name` values: `brand`, `content`, `feedback`, `predictor`.
 
 ## Security
 
-| Area | Protection |
-| --- | --- |
-| Authentication | Bearer token on every data route, compared in constant time. No default key: the app will not start without one. |
-| Model output | Scores are coerced to integers and ranges to digits before leaving the server, and the UI escapes everything it renders. |
+| Area             | Protection                                                                                                                                                                                     |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Authentication   | Bearer token on every data route, compared in constant time. No default key: the app will not start without one.                                                                               |
+| Model output     | Scores are coerced to integers and ranges to digits before leaving the server, and the UI escapes everything it renders.                                                                       |
 | Prompt injection | Agent tools are built per request with the person's details, profile id and topic fixed in code, so text in a prompt cannot redirect them to another profile's data or change what gets saved. |
-| Input | Every field has a length limit, numbers are bounded, IDs are range-checked, and request bodies are capped at 64 KB. |
-| Browser | Strict Content-Security-Policy (scripts from this origin only, no inline code), plus `nosniff`, `DENY` framing and `no-referrer`. |
-| Errors | Provider and internal error text goes to the server log; clients get a generic message with a trace id. |
-| Observability | `/metrics` requires the API key unless `METRICS_PUBLIC=1`. |
-| Operator data | Token usage and cost are served only on routes that take a separate `ADMIN_API_KEY`. The user's key is refused, and the routes are off when no admin key is set. |
-| Container | Runs as an unprivileged user, not root. |
-| Dependencies | Pinned to patched versions and checked with `pip-audit`. |
+| Input            | Every field has a length limit, numbers are bounded, IDs are range-checked, and request bodies are capped at 64 KB.                                                                            |
+| Browser          | Strict Content-Security-Policy (scripts from this origin only, no inline code), plus `nosniff`, `DENY` framing and `no-referrer`.                                                              |
+| Errors           | Provider and internal error text goes to the server log; clients get a generic message with a trace id.                                                                                        |
+| Observability    | `/metrics` requires the API key unless `METRICS_PUBLIC=1`.                                                                                                                                     |
+| Operator data    | Token usage and cost are served only on routes that take a separate `ADMIN_API_KEY`. The user's key is refused, and the routes are off when no admin key is set.                               |
+| Container        | Runs as an unprivileged user, not root.                                                                                                                                                        |
+| Dependencies     | Pinned to patched versions and checked with `pip-audit`.                                                                                                                                       |
 
 ---
 
@@ -564,25 +564,25 @@ PersonaAI/
 
 ## Environment Variables
 
-| Variable            | Description                                                           | Required | Default                                       |
-| ------------------- | --------------------------------------------------------------------- | -------- | --------------------------------------------- |
-| `GROQ_API_KEY`      | Groq API key — [console.groq.com/keys](https://console.groq.com/keys) | Yes      | — (app will not start)                        |
-| `API_KEY`           | Bearer token protecting the API                                       | Yes      | — (app will not start)                        |
-| `GROQ_MODEL`        | Groq model used by all agents and LLM calls                           | Yes      | — (app will not start)                        |
-| `AGENT_MODE`        | `1` runs the ReAct agents, `0` uses one direct LLM call               | No       | `1`                                           |
-| `DATABASE_URL`      | SQLAlchemy connection string                                          | No       | `sqlite:///./personaai.db`                    |
-| `PERSONAAI_DB_PATH` | SQLite path used by the Streamlit dashboard                           | No       | `personaai.db`                                |
-| `ALLOWED_ORIGINS`   | Comma-separated CORS origins                                          | No       | `http://localhost:8000,http://127.0.0.1:8000` |
-| `METRICS_PUBLIC`    | `1` makes `/metrics` public; only for private networks                | No       | `0`                                           |
-| `ADMIN_API_KEY`     | Separate key for `/costs` and `/audit-logs`; must differ from `API_KEY` | No     | — (operator routes off)                       |
-| `LLM_INPUT_PRICE_PER_MILLION`  | Input price in USD per million tokens                      | No       | `0.15`                                        |
-| `LLM_OUTPUT_PRICE_PER_MILLION` | Output price in USD per million tokens                     | No       | `0.60`                                        |
-| `DAILY_BUDGET_USD`  | Daily spend limit in USD; empty switches the guard off                | No       | — (off)                                       |
-| `BUDGET_SOFT_LIMIT_PERCENT` | Share of the budget at which agents pause                     | No       | `80`                                          |
-| `LLM_MAX_TOKENS`    | Output cap per structured call, reasoning included                    | No       | `4096`                                        |
-| `LLM_REASONING_EFFORT` | `low`, `medium` or `high` reasoning for gpt-oss; empty uses Groq's default | No | — (Groq default)                     |
-| `PREDICTOR_MODEL`   | Model for the engagement predictor only; empty uses `GROQ_MODEL`     | No       | — (`GROQ_MODEL`)                              |
-| `PREDICTION_CACHE_HOURS` | How long a stored prediction is reused; `0` turns the cache off | No       | `24`                                          |
+| Variable                       | Description                                                                | Required | Default                                       |
+| ------------------------------ | -------------------------------------------------------------------------- | -------- | --------------------------------------------- |
+| `GROQ_API_KEY`                 | Groq API key — [console.groq.com/keys](https://console.groq.com/keys)      | Yes      | — (app will not start)                        |
+| `API_KEY`                      | Bearer token protecting the API                                            | Yes      | — (app will not start)                        |
+| `GROQ_MODEL`                   | Groq model used by all agents and LLM calls                                | Yes      | — (app will not start)                        |
+| `AGENT_MODE`                   | `1` runs the ReAct agents, `0` uses one direct LLM call                    | No       | `1`                                           |
+| `DATABASE_URL`                 | SQLAlchemy connection string                                               | No       | `sqlite:///./personaai.db`                    |
+| `PERSONAAI_DB_PATH`            | SQLite path used by the Streamlit dashboard                                | No       | `personaai.db`                                |
+| `ALLOWED_ORIGINS`              | Comma-separated CORS origins                                               | No       | `http://localhost:8000,http://127.0.0.1:8000` |
+| `METRICS_PUBLIC`               | `1` makes `/metrics` public; only for private networks                     | No       | `0`                                           |
+| `ADMIN_API_KEY`                | Separate key for `/costs` and `/audit-logs`; must differ from `API_KEY`    | No       | — (operator routes off)                       |
+| `LLM_INPUT_PRICE_PER_MILLION`  | Input price in USD per million tokens                                      | No       | `0.15`                                        |
+| `LLM_OUTPUT_PRICE_PER_MILLION` | Output price in USD per million tokens                                     | No       | `0.60`                                        |
+| `DAILY_BUDGET_USD`             | Daily spend limit in USD; empty switches the guard off                     | No       | — (off)                                       |
+| `BUDGET_SOFT_LIMIT_PERCENT`    | Share of the budget at which agents pause                                  | No       | `80`                                          |
+| `LLM_MAX_TOKENS`               | Output cap per structured call, reasoning included                         | No       | `4096`                                        |
+| `LLM_REASONING_EFFORT`         | `low`, `medium` or `high` reasoning for gpt-oss; empty uses Groq's default | No       | — (Groq default)                              |
+| `PREDICTOR_MODEL`              | Model for the engagement predictor only; empty uses `GROQ_MODEL`           | No       | — (`GROQ_MODEL`)                              |
+| `PREDICTION_CACHE_HOURS`       | How long a stored prediction is reused; `0` turns the cache off            | No       | `24`                                          |
 
 gpt-oss is a reasoning model, and its hidden reasoning counts against
 `LLM_MAX_TOKENS` along with the visible answer. If the cap is too low, the model
